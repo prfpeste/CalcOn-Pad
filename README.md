@@ -144,3 +144,7 @@ CalcOnPad.py # main Flask application (SymPy, units, plotting) templates/ index.
 
 This project is licensed under the GNU General Public License v3.0 (GPL-3.0).
 See the LICENSE file for details.
+
+## Version
+
+Current version: 0.9.0
