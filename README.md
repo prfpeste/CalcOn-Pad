@@ -139,3 +139,8 @@ pyinstaller ^ --name CalcOnPad ^ --onefile ^ --add-data "templates;templates" ^ 
 
 A minimal structure:
 CalcOnPad.py # main Flask application (SymPy, units, plotting) templates/ index.html # HTML template with editor, toolbar and MathJax integration
+
+## License
+
+This project is licensed under the GNU General Public License v3.0 (GPL-3.0).
+See the LICENSE file for details.
