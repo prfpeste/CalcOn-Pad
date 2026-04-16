@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <title>CalcOn Pad</title>
+  <script>
+    window.MathJax = {
+      tex: {inlineMath: [['$', '$'], ['\\(', '\\)']]},
+      chtml: {
+        displayAlign: 'left',
+        displayIndent: '0em'
+      }
+    };
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+    }
+
+    body {
+      font-family: "Segoe UI", sans-serif;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+      background: #e0e0e0;
+    }
+
+    .toolbar {
+      flex: 0 0 auto;
+      padding: 8px 12px;
+      border-bottom: 1px solid #ccc;
+      background: #d5d5d5;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .icon-button {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      border: none;
+      background: #4CAF50;
+      color: white;
+      font-size: 20px;
+      font-weight: bold;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+      transition: background 0.2s ease, transform 0.1s ease, box-shadow 0.1s ease;
+    }
+
+    .icon-button.open {
+      background: #2196F3;
+    }
+    .icon-button.save {
+      background: #2196F3;
+    }
+    .icon-button.print {
+      background: #2196F3;
+    }
+
+    .icon-button:hover {
+      filter: brightness(1.05);
+    }
+
+    .icon-button:active {
+      transform: translateY(1px);
+      box-shadow: 0 0 1px rgba(0,0,0,0.4);
+    }
+
+    .icon-button:focus {
+      outline: none;
+    }
+
+    .main {
+      flex: 1 1 auto;
+      display: flex;
+      overflow: hidden;
+    }
+
+    .left, .right {
+      flex: 0 0 50%;
+      min-width: 0;
+      padding: 12px;
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .left {
+      border-right: 1px solid #ccc;
+    }
+
+    .panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    form {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+    }
+
+    textarea {
+      flex: 1;
+      width: 100%;
+      resize: none;
+      font-family: "Fira Code", "Consolas", monospace;
+      font-size: 12pt;
+      box-sizing: border-box;
+      overflow: auto;
+      white-space: pre;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      background: #ffffff;
+    }
+
+    .output-container {
+      flex: 1;
+      overflow-y: auto;
+      overflow-x: auto;
+      min-height: 0;
+      white-space: nowrap;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      background: #ffffff;
+      padding: 8px;
+    }
+
+    .formula-block {
+      margin-bottom: 1.0em;
+      white-space: normal;
+    }
+
+    .formula-block img {
+      max-width: 100%;
+      height: auto;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      margin-top: 0.5em;
+    }
+
+    @media print {
+      body {
+        background: #ffffff;
+        overflow: visible;
+      }
+
+      .toolbar,
+      .left {
+        display: none !important;
+      }
+
+      .main {
+        display: block;
+        padding: 0;
+      }
+
+      .right {
+        border: none;
+        padding: 0;
+        width: 100%;
+      }
+
+      .output-container {
+        border: none;
+        border-radius: 0;
+        box-shadow: none;
+        background: #ffffff;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <input type="file" id="file-input" accept=".txt,.calc,.dat,.cfg,*/*" style="display:none" />
+
+    <button
+      type="button"
+      class="icon-button open"
+      title="file opne"
+      onclick="document.getElementById('file-input').click();"
+    >
+      📂️
+    </button>
+
+    <button
+      type="button"
+      class="icon-button save"
+      title="save"
+      onclick="saveFile();"
+    >
+      💾️
+    </button>
+
+    <button
+      type="button"
+      class="icon-button print"
+      title="print"
+      onclick="window.print();"
+    >
+      🖨
+    </button>
+
+    <button
+      type="button"
+      class="icon-button"
+      title="solve"
+      onclick="document.getElementById('calc-form').submit();"
+    >
+      =
+    </button>
+  </div>
+
+  <div class="main">
+    <div class="left">
+      <form method="post" id="calc-form" class="panel">
+        <textarea id="code-textarea" name="code">{{ code }}</textarea>
+      </form>
+    </div>
+
+    <div class="right">
+      <div class="panel">
+        <div class="output-container">
+          {% for block in results %}
+            <div class="formula-block">
+              {% for item in block %}
+                {% if item.type == 'latex' %}
+                  <div>$$ {{ item.content | safe }} $$</div>
+                {% elif item.type == 'plot' %}
+                  <div><img src="{{ item.src }}" alt="Plot"></div>
+                {% endif %}
+              {% endfor %}
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const codeTextarea = document.getElementById('code-textarea');
+    const fileInput = document.getElementById('file-input');
+
+    fileInput.addEventListener('change', function() {
+      const file = fileInput.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        codeTextarea.value = e.target.result;
+      };
+      reader.readAsText(file, 'utf-8');
+    });
+
+    function saveFile() {
+      const text = codeTextarea.value || '';
+      const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+
+      let filename = prompt('enter filename:', 'CalcOnPad.txt');
+      if (!filename) {
+        return;
+      }
+
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = filename;
+
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      URL.revokeObjectURL(link.href);
+    }
+  </script>
+</body>
+</html>
