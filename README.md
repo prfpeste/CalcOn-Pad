@@ -79,7 +79,11 @@ CalcOnPad.py templates/ index.html
 
 In the project directory, run:
 ```bash
-pyinstaller \ --name CalcOnPad \ --onefile \ --add-data "templates:templates" \ CalcOnPad.py
+pyinstaller \
+--name CalcOnPad \
+--onefile \
+--add-data "templates:templates" \
+CalcOnPad.py
 ```
 
 Explanation:
@@ -150,4 +154,4 @@ See the LICENSE file for details.
 
 ## Version
 
-Current version: 0.9.0
+Current version: 0.9.1
