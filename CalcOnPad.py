@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 # Flask-based symbolic calculator with unit support and simple plotting
 
-import re
-import io
-import base64
-
-from flask import Flask, render_template, request
 import threading
 import webbrowser
 import time
+import re
+import io
+import base64
+import os
+import math
+
+
+from flask import Flask, render_template, request
 
 import sympy as sp
 from sympy.physics.units import (
@@ -62,6 +65,7 @@ unit_ns = {
     'L': L,
     'liter': liter,
     'R': R,
+    'degC': K,
 }
 
 GREEK_VARS = {
@@ -69,6 +73,7 @@ GREEK_VARS = {
     "beta": r"\beta",
     "gamma": r"\gamma",
     "delta": r"\delta",
+    "Delta": r"\Delta",
     "lamda": r"\lambda",
     "epsilon": r"\epsilon",
     "zeta": r"\zeta",
@@ -111,19 +116,32 @@ preferred_units = [
     Pa, bar, atm,
     V, A, ohm,
 ]
+BASE_UNITS = [m, kg, s, A, K, mol, cd]
+
 
 # explicit desired units that can be specified via "| unit"
 # structure: name: (name, base_unit, factor)
 # factor = how many base units correspond to 1 of the desired unit
 desired_unit_map = {
-    "J":    ("J",    J,    1),
-    "Ws":   ("Ws",   J,    1),
-    "Wh":   ("Wh",   J,    3600),
-    "kWh":  ("kWh",  J,    3_600_000),
-    "N":    ("N",    N,    1),
-    "W":    ("W",    W,    1),
-    "Pa":   ("Pa",   Pa,   1),
-    "bar":  ("bar",  Pa,   100_000),
+    "J":    (r"J",    J,    1),
+    "kJ":   (r"kJ",   J,   1000),
+    "MJ":   (r"MJ",   J,   1_000_000),
+    "Ws":   (r"Ws",   J,    1),
+    "Wh":   (r"Wh",   J,    3600),
+    "kWh":  (r"kWh",  J,    3_600_000),
+    "N":    (r"N",    N,    1),
+    "W":    (r"W",    W,    1),
+    "kW":   (r"kW",   W,    1000),
+    "MW":   (r"MW",   W,    1_000_000),
+    "Pa":   (r"Pa",   Pa,   1),
+    "bar":  (r"bar",  Pa,   100_000),
+    "m^2":  (r"m^2",  m**2, 1),
+    "cm^2": (r"cm^2", m**2, 0.0001),
+    "m^3":  (r"m^3",  m**3, 1),
+    "W/(m^2*K)": (r"\frac{W}{m^{2} K}", W/(m**2*K), 1),
+    "W/(m*K)": (r"\frac{W}{m K}", W/(m*K), 1),
+    "J/(kg*K)": (r"\frac{J}{kg K}", J/(kg*K), 1),
+    "degC": (r"^\circ\mathrm{C}", K, 1),    
 }
 
 # apostrophe syntax for units, e.g. 10'J, 3's, 5'm etc.
@@ -137,6 +155,8 @@ def expand_units(expr: str) -> str:
         unit = m.group("unit")
         if "." not in num:
             num = num + ".0"
+        if unit == "degC":
+            return f"({num} + 273.15) * K"
         return f"{num} * {unit}"
 
     return unit_pattern.sub(repl, expr)
@@ -188,13 +208,27 @@ def var_to_latex(var_name: str) -> str:
             return GREEK_VARS[var_name]
         return var_name
 
-    # variable names with index, e.g. phi_1, alpha_tot
+    # variable names with index, e.g. phi_1, alpha_tot, delta_theta, delta_theta_1
     base, index = var_name.split('_', 1)
 
     if base in GREEK_VARS:
         base_latex = GREEK_VARS[base]
     else:
         base_latex = base
+
+    if index in GREEK_VARS:
+        index_latex = GREEK_VARS[index]
+        return rf"{base_latex}{index_latex}"
+
+    if '_' in index:
+        index_base, index_suffix = index.split('_', 1)
+        if index_base in GREEK_VARS:
+            index_base_latex = GREEK_VARS[index_base]
+        else:
+            index_base_latex = index_base
+
+        safe_suffix = index_suffix.replace("\\", r"\\").replace("_", r"\_")
+        return rf"{base_latex}{index_base_latex}_{{\text{{{safe_suffix}}}}}"
 
     safe_index = index.replace("\\", r"\\").replace("_", r"\_")
     return rf"{base_latex}_{{\text{{{safe_index}}}}}"
@@ -361,6 +395,15 @@ def index():
                 if (stripped.startswith('"') and stripped.endswith('"')
                         and len(stripped) >= 2):
                     text = stripped[1:-1]
+
+                    if text.startswith("!"):
+                        raw_latex = text[1:]
+                        block_items.append({
+                            "type": "latex",
+                            "content": raw_latex,
+                        })
+                        continue
+
                     safe_text = (
                         text
                         .replace("\\", r"\\")
@@ -448,22 +491,42 @@ def index():
                     val_conv = val
 
                     if desired_unit is not None:
-                        desired_name, base_unit, factor = desired_unit
+                        unit_label, base_unit, factor = desired_unit
                         try:
                             val_base = sp.simplify(convert_to(val, base_unit))
                         except Exception as e:
                             raise ValueError(
-                                f"Conversion to base unit for {desired_name} failed: {e}"
+                                f"Conversion to desired unit failed: {e}"
                             )
 
                         mag_base, unit_base = split_magnitude_unit(val_base)
-                        mag = sp.simplify(mag_base / factor)
-                        unit_label = desired_name
+
+                        # Dimensionscheck: unit_base/base_unit muss dimensionslos sein
+                        ratio = sp.simplify(unit_base / base_unit)
+                        if ratio.has(*unit_ns.values()):
+                            raise ValueError(
+                                f"Desired unit '{unit_label}' is not dimensionally compatible with the expression."
+                            )
+
+                        # special case: absolute temperature in K -> °C
+                        if base_unit == K and unit_label.startswith("^\circ"):
+                            mag = sp.simplify(mag_base - 273.15)
+                        else:
+                            mag = sp.simplify(mag_base / factor)
 
                         mag_str = format_magnitude_decimal(mag, digits=3)
-                        mag_with_unit = rf"{mag_str}\,\text{{{unit_label}}}"
+                        mag_with_unit = rf"{mag_str}\,{unit_label}"
 
-                        latex_expr = latex(expr_sym, mul_symbol="\\cdot").replace("\\cdot", "\\cdot{}")
+                        symbol_names = {}
+                        for name in user_vars:
+                            sym = sp.Symbol(name)
+                            symbol_names[sym] = var_to_latex(name)
+
+                        latex_expr = latex(
+                            expr_sym,
+                            mul_symbol="\\cdot",
+                            symbol_names=symbol_names,
+                        ).replace("\\cdot", "\\cdot{}")
 
                         if var is not None:
                             var_latex = var_to_latex(var)
@@ -490,7 +553,22 @@ def index():
 
                     val = val_conv
 
-                    latex_expr = latex(expr_sym, mul_symbol="\\cdot").replace("\\cdot", "\\cdot{}")
+                    try:
+                        val = sp.simplify(convert_to(val, BASE_UNITS))
+                    except Exception:
+                        pass
+
+                    symbol_names = {}
+                    for name in user_vars:
+                        sym = sp.Symbol(name)
+                        symbol_names[sym] = var_to_latex(name)
+
+                    latex_expr = latex(
+                        expr_sym,
+                        mul_symbol="\\cdot",
+                        symbol_names=symbol_names,
+                    ).replace("\\cdot", "\\cdot{}")
+                    
                     mag, unit = split_magnitude_unit(val)
                     mag_str = format_magnitude_decimal(mag, digits=3)
 
@@ -555,6 +633,7 @@ def index():
 
     return render_template("index.html", code=user_input, results=results)
 
+
 def run_server():
     """Run the Flask development server (debug disabled for PyInstaller builds)."""
     app.run(host="127.0.0.1", port=5000, debug=False)
@@ -574,4 +653,4 @@ if __name__ == "__main__":
     # Keep the main thread alive so the program does not exit immediately
     t.join()
 
-__version__ = "0.9.0"
+__version__ = "0.9.2"
