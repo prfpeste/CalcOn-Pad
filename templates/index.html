@@ -151,9 +151,14 @@
     }
 
     @media print {
+      html, body {
+        height: auto !important;
+        overflow: visible !important;
+      }
+
       body {
-        background: #ffffff;
-        overflow: visible;
+        background: #ffffff !important;
+        display: block !important;
       }
 
       .toolbar,
@@ -162,21 +167,46 @@
       }
 
       .main {
-        display: block;
-        padding: 0;
+        display: block !important;
+        padding: 0 !important;
+        height: auto !important;
+        max-height: none !important;
+        overflow: visible !important;
       }
 
       .right {
-        border: none;
-        padding: 0;
-        width: 100%;
+        border: none !important;
+        padding: 0 !important;
+        width: 100% !important;
+        flex: none !important;
+        display: block !important;
+        height: auto !important;
+        max-height: none !important;
+        overflow: visible !important;
+      }
+
+      .panel {
+        display: block !important;
+        height: auto !important;
+        max-height: none !important;
+        overflow: visible !important;
       }
 
       .output-container {
-        border: none;
-        border-radius: 0;
-        box-shadow: none;
-        background: #ffffff;
+        border: none !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
+        background: #ffffff !important;
+
+        overflow: visible !important;
+        height: auto !important;
+        max-height: none !important;
+        white-space: normal !important;
+      }
+
+      .formula-block {
+        page-break-inside: avoid;
+        margin-bottom: 1em;
       }
     }
   </style>
