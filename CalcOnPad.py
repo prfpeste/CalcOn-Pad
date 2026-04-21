@@ -123,25 +123,25 @@ BASE_UNITS = [m, kg, s, A, K, mol, cd]
 # structure: name: (name, base_unit, factor)
 # factor = how many base units correspond to 1 of the desired unit
 desired_unit_map = {
-    "J":    (r"J",    J,    1),
-    "kJ":   (r"kJ",   J,   1000),
-    "MJ":   (r"MJ",   J,   1_000_000),
-    "Ws":   (r"Ws",   J,    1),
-    "Wh":   (r"Wh",   J,    3600),
-    "kWh":  (r"kWh",  J,    3_600_000),
-    "N":    (r"N",    N,    1),
-    "W":    (r"W",    W,    1),
-    "kW":   (r"kW",   W,    1000),
-    "MW":   (r"MW",   W,    1_000_000),
-    "Pa":   (r"Pa",   Pa,   1),
-    "bar":  (r"bar",  Pa,   100_000),
-    "m^2":  (r"m^2",  m**2, 1),
-    "cm^2": (r"cm^2", m**2, 0.0001),
-    "m^3":  (r"m^3",  m**3, 1),
-    "W/(m^2*K)": (r"\frac{W}{m^{2} K}", W/(m**2*K), 1),
-    "W/(m*K)": (r"\frac{W}{m K}", W/(m*K), 1),
-    "J/(kg*K)": (r"\frac{J}{kg K}", J/(kg*K), 1),
-    "degC": (r"^\circ\mathrm{C}", K, 1),    
+    "J":    (r"\mathrm{J}",    J,    1),
+    "kJ":   (r"\mathrm{kJ}",   J,   1000),
+    "MJ":   (r"\mathrm{MJ}",   J,   1_000_000),
+    "Ws":   (r"\mathrm{Ws}",   J,    1),
+    "Wh":   (r"\mathrm{Wh}",   J,    3600),
+    "kWh":  (r"\mathrm{kWh}",  J,    3_600_000),
+    "N":    (r"\mathrm{N}",    N,    1),
+    "W":    (r"\mathrm{W}",    W,    1),
+    "kW":   (r"\mathrm{kW}",   W,    1000),
+    "MW":   (r"\mathrm{MW}",   W,    1_000_000),
+    "Pa":   (r"\mathrm{Pa}",   Pa,   1),
+    "bar":  (r"\mathrm{bar}",  Pa,   100_000),
+    "m^2":  (r"\mathrm{m}^2",  m**2, 1),
+    "cm^2": (r"\mathrm{cm}^2", m**2, 0.0001),
+    "m^3":  (r"\mathrm{m}^3",  m**3, 1),
+    "W/(m^2*K)": ( r"\frac{\mathrm{W}}{\mathrm{m}^{2}\,\mathrm{K}}", W/(m**2*K), 1),
+    "W/(m*K)": (r"\frac{\mathrm{W}}{\mathrm{m}\,\mathrm{K}}", W/(m*K), 1),
+    "J/(kg*K)": (r"\frac{\mathrm{J}}{\mathrm{kg}\,\mathrm{K}}", J/(kg*K), 1),
+    "degC": (r"^\circ\mathrm{C}", K, 1),
 }
 
 # apostrophe syntax for units, e.g. 10'J, 3's, 5'm etc.
@@ -199,6 +199,7 @@ def format_magnitude_decimal(mag, digits=3):
             pass
 
     return latex(mag)
+
 
 
 def var_to_latex(var_name: str) -> str:
@@ -354,6 +355,7 @@ def index():
         '"Symbolic"\n'
         "f = x^2\n"
         "diff(f, x)\n"
+        "integrate(f, (x, 0, 5))\n"
         "plot(f, x, -5, 5)\n"
         "\n"
         '"Equation solver"\n'
@@ -488,6 +490,20 @@ def index():
                     if expr_sym is None or val is None:
                         continue
 
+                    if isinstance(val, (list, tuple, dict)) or isinstance(expr_sym, (list, tuple, dict)):
+                        latex_expr = latex(val)
+                        if var is not None:
+                            var_latex = var_to_latex(var)
+                            full_latex = rf"{var_latex} = {latex_expr}"
+                        else:
+                            full_latex = latex_expr
+
+                        block_items.append({
+                            "type": "latex",
+                            "content": full_latex,
+                        })
+                        continue
+
                     val_conv = val
 
                     if desired_unit is not None:
@@ -528,9 +544,18 @@ def index():
                             symbol_names=symbol_names,
                         ).replace("\\cdot", "\\cdot{}")
 
+                        only_units_and_numbers = True
+                        for s in expr_sym.free_symbols:
+                            if s not in unit_ns.values():
+                                only_units_and_numbers = False
+                                break
+
                         if var is not None:
                             var_latex = var_to_latex(var)
-                            full_latex = rf"{var_latex} = {latex_expr} = {mag_with_unit}"
+                            if only_units_and_numbers:
+                                full_latex = rf"{var_latex} = {mag_with_unit}"
+                            else:
+                                full_latex = rf"{var_latex} = {latex_expr} = {mag_with_unit}"
                         else:
                             full_latex = rf"{latex_expr} = {mag_with_unit}"
 
@@ -568,7 +593,7 @@ def index():
                         mul_symbol="\\cdot",
                         symbol_names=symbol_names,
                     ).replace("\\cdot", "\\cdot{}")
-                    
+
                     mag, unit = split_magnitude_unit(val)
                     mag_str = format_magnitude_decimal(mag, digits=3)
 
@@ -578,9 +603,18 @@ def index():
                         latex_unit = latex(unit)
                         mag_with_unit = rf"{mag_str}\,{latex_unit}"
 
+                    only_units_and_numbers = True
+                    for s in expr_sym.free_symbols:
+                        if s not in unit_ns.values():
+                            only_units_and_numbers = False
+                            break
+
                     if var is not None:
                         var_latex = var_to_latex(var)
-                        full_latex = rf"{var_latex} = {latex_expr} = {mag_with_unit}"
+                        if only_units_and_numbers:
+                            full_latex = rf"{var_latex} = {mag_with_unit}"
+                        else:
+                            full_latex = rf"{var_latex} = {latex_expr} = {mag_with_unit}"
                     else:
                         full_latex = rf"{latex_expr} = {mag_with_unit}"
 
@@ -633,11 +667,9 @@ def index():
 
     return render_template("index.html", code=user_input, results=results)
 
-
 def run_server():
     """Run the Flask development server (debug disabled for PyInstaller builds)."""
     app.run(host="127.0.0.1", port=5000, debug=False)
-
 
 if __name__ == "__main__":
     # Start server in a background thread
@@ -653,4 +685,4 @@ if __name__ == "__main__":
     # Keep the main thread alive so the program does not exit immediately
     t.join()
 
-__version__ = "0.9.2"
+__version__ = "0.9.3"
