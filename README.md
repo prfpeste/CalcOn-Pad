@@ -13,7 +13,9 @@ It lets you:
 The interface consists of a text editor on the left and a LaTeX/plot output area on the right.
 
 ## Screenshot
-
+![CalcOn Pad screenshot](images/SC1.png)
+![CalcOn Pad screenshot](images/SC2.png)
+![CalcOn Pad screenshot](images/SC3.png)
 
 ## Features
 
