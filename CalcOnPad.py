@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 # Flask-based symbolic calculator with unit support and simple plotting
 
-import threading
-import webbrowser
-import time
 import re
 import io
 import base64
-import os
-import math
-
+import threading
+import webbrowser
+import time
+import sys
 
 from flask import Flask, render_template, request
 
@@ -24,7 +22,6 @@ from sympy.physics.units import (
     convert_to,
 )
 from sympy import latex
-from sympy.abc import alpha, beta, gamma, delta, lamda, epsilon, zeta, eta, theta, phi, psi, omega
 
 import matplotlib
 matplotlib.use("Agg")
@@ -68,20 +65,29 @@ unit_ns = {
     'degC': K,
 }
 
+# Wichtig: wir wollen nur ϑ eintippen, intern aber θ benutzen.
+# GREEK_VARS definiert die LaTeX-Namen für die Variablen.
 GREEK_VARS = {
-    "alpha": r"\alpha",
-    "beta": r"\beta",
-    "gamma": r"\gamma",
-    "delta": r"\delta",
-    "Delta": r"\Delta",
-    "lamda": r"\lambda",
-    "epsilon": r"\epsilon",
-    "zeta": r"\zeta",
-    "eta": r"\eta",
-    "theta": r"\vartheta",
-    "phi": r"\varphi",
-    "psi": r"\psi",
-    "omega": r"\omega",
+    "α": r"\alpha",
+    "β": r"\beta",
+    "γ": r"\gamma",
+    "δ": r"\delta",
+    "ε": r"\epsilon",
+    "ζ": r"\zeta",
+    "η": r"\eta",
+    "θ": r"\vartheta",   # θ wird als \vartheta dargestellt
+    "λ": r"\lambda",
+    "μ": r"\mu",
+    "ν": r"\nu",
+    "ξ": r"\xi",
+    "π": r"\pi",
+    "ρ": r"\rho",
+    "σ": r"\sigma",
+    "τ": r"\tau",
+    "φ": r"\varphi",
+    "χ": r"\chi",
+    "ψ": r"\psi",
+    "ω": r"\omega",
 }
 
 # environment for numeric evaluation
@@ -110,7 +116,7 @@ reserved_names = set(unit_ns.keys())
 
 # preferred target units (if no explicit target unit is given)
 preferred_units = [
-    N,
+    N, W/(m*K), W/(m**2*K), W/m,
     J,
     W,
     Pa, bar, atm,
@@ -138,10 +144,11 @@ desired_unit_map = {
     "m^2":  (r"\mathrm{m}^2",  m**2, 1),
     "cm^2": (r"\mathrm{cm}^2", m**2, 0.0001),
     "m^3":  (r"\mathrm{m}^3",  m**3, 1),
-    "W/(m^2*K)": ( r"\frac{\mathrm{W}}{\mathrm{m}^{2}\,\mathrm{K}}", W/(m**2*K), 1),
-    "W/(m*K)": (r"\frac{\mathrm{W}}{\mathrm{m}\,\mathrm{K}}", W/(m*K), 1),
-    "J/(kg*K)": (r"\frac{\mathrm{J}}{\mathrm{kg}\,\mathrm{K}}", J/(kg*K), 1),
-    "degC": (r"^\circ\mathrm{C}", K, 1),
+    "W/(m^2*K)": (r"\frac{\mathrm{W}}{\mathrm{m}^{2}\,\mathrm{K}}", W/(m**2*K), 1),
+    "W/(m*K)":   (r"\frac{\mathrm{W}}{\mathrm{m}\,\mathrm{K}}",     W/(m*K),    1),
+    "W/m":       (r"\frac{\mathrm{W}}{\mathrm{m}}",                 W/m,        1),
+    "J/(kg*K)":  (r"\frac{\mathrm{J}}{\mathrm{kg}\,\mathrm{K}}",    J/(kg*K),   1),
+    "degC":      (r"^\circ\mathrm{C}",                              K,          1),
 }
 
 # apostrophe syntax for units, e.g. 10'J, 3's, 5'm etc.
@@ -159,6 +166,7 @@ def expand_units(expr: str) -> str:
             return f"({num} + 273.15) * K"
         return f"{num} * {unit}"
 
+    # hier könnte man auch ϑ->θ machen, ist aber schon in eval_line erledigt
     return unit_pattern.sub(repl, expr)
 
 
@@ -201,8 +209,24 @@ def format_magnitude_decimal(mag, digits=3):
     return latex(mag)
 
 
-
 def var_to_latex(var_name: str) -> str:
+    """
+    Konvertiert einen Variablennamen in LaTeX.
+    Unterstützt u.a.:
+      - einfache griechische Buchstaben
+      - Indizes mit '_'
+      - Δ + griechischer Buchstabe, z.B. "Δθ" -> \Delta\vartheta
+    """
+
+    # Einmal: ϑ -> θ normalisieren, falls doch irgendwo auftaucht
+    var_name = var_name.replace("ϑ", "θ")
+
+    # Spezialfall: Delta + griechischer Buchstabe, z.B. "Δθ"
+    if var_name.startswith("Δ") and "_" not in var_name:
+        base = var_name[1:]
+        if base in GREEK_VARS:
+            return r"\Delta" + GREEK_VARS[base]
+
     # greek variable names without index
     if '_' not in var_name:
         if var_name in GREEK_VARS:
@@ -211,6 +235,10 @@ def var_to_latex(var_name: str) -> str:
 
     # variable names with index, e.g. phi_1, alpha_tot, delta_theta, delta_theta_1
     base, index = var_name.split('_', 1)
+
+    # Normalisierung auch hier:
+    base = base.replace("ϑ", "θ")
+    index = index.replace("ϑ", "θ")
 
     if base in GREEK_VARS:
         base_latex = GREEK_VARS[base]
@@ -223,6 +251,7 @@ def var_to_latex(var_name: str) -> str:
 
     if '_' in index:
         index_base, index_suffix = index.split('_', 1)
+        index_base = index_base.replace("ϑ", "θ")
         if index_base in GREEK_VARS:
             index_base_latex = GREEK_VARS[index_base]
         else:
@@ -248,6 +277,10 @@ def eval_line(line: str):
     """
     global sym_exprs
     line = line.strip()
+
+    # WICHTIG: Benutzer tippt ϑ, intern benutzen wir θ
+    line = line.replace("ϑ", "θ")
+
     if not line:
         return None, None, None, None, None
 
@@ -347,10 +380,8 @@ def create_plot(expr_sym, var_symbol, x_min=-10, x_max=10, num_points=400):
 def index():
     default_input = (
         '"Example calculation with units"\n'
-        "v = 10'm/s ; t = 3's\n"
-        "m_a = 10'kg\n"
-        "F = m_a * v / t\n"
-        "lamda = 5'W/(m*K)\n"
+        "v = 10'm/s ; t = 3's ; m_ = 10'kg\n"
+        "F = m_ * v / t|N\n"
         "\n"
         '"Symbolic"\n'
         "f = x^2\n"
@@ -365,7 +396,6 @@ def index():
     )
 
     user_input = default_input
-    # list of blocks; each block is a list of items (dicts)
     results = []
 
     if request.method == "POST":
@@ -382,14 +412,13 @@ def index():
             line_no += 1
             parts = [p.strip() for p in raw.split(';') if p.strip()]
             if not parts:
+                results.append([{"type": "spacer"}])
                 continue
 
-            # list of {"type": "...", ...} for this input line
             block_items = []
 
             for part in parts:
                 stripped = part.strip()
-
                 if not stripped or stripped.startswith("#"):
                     continue
 
@@ -421,12 +450,15 @@ def index():
                 if stripped.startswith("plot(") and stripped.endswith(")"):
                     try:
                         inner = stripped[5:-1]
+
+                        # auch hier ϑ -> θ normalisieren
+                        inner = inner.replace("ϑ", "θ")
+
                         args = [a.strip() for a in inner.split(",")]
 
                         if len(args) < 2:
                             raise ValueError("plot(f, x, [xmin, xmax]) expected.")
 
-                        # symbolic environment, same as in eval_line()
                         env_syms = {}
                         env_syms.update(unit_ns)
                         env_syms.update({
@@ -448,11 +480,12 @@ def index():
 
                         func_name = args[0]
 
-                        # if this is a defined variable and we have a symbolic expression for it
+                        # falls trotzdem noch ϑ drin – sicherheitshalber:
+                        func_name = func_name.replace("ϑ", "θ")
+
                         if func_name in sym_exprs:
                             f_expr = sym_exprs[func_name]
                         else:
-                            # otherwise parse expression directly (e.g. plot(x^2, x, -5, 5))
                             f_expr = sp.sympify(func_name, locals=env_syms)
 
                         var_symbol = sp.Symbol(args[1])
@@ -505,6 +538,7 @@ def index():
                         continue
 
                     val_conv = val
+                    preferred_used = False
 
                     if desired_unit is not None:
                         unit_label, base_unit, factor = desired_unit
@@ -517,15 +551,13 @@ def index():
 
                         mag_base, unit_base = split_magnitude_unit(val_base)
 
-                        # Dimensionscheck: unit_base/base_unit muss dimensionslos sein
                         ratio = sp.simplify(unit_base / base_unit)
                         if ratio.has(*unit_ns.values()):
                             raise ValueError(
                                 f"Desired unit '{unit_label}' is not dimensionally compatible with the expression."
                             )
 
-                        # special case: absolute temperature in K -> °C
-                        if base_unit == K and unit_label.startswith("^\circ"):
+                        if base_unit == K and unit_label.startswith(r"^\circ"):
                             mag = sp.simplify(mag_base - 273.15)
                         else:
                             mag = sp.simplify(mag_base / factor)
@@ -572,16 +604,18 @@ def index():
                                 cand = sp.simplify(convert_to(val, u))
                                 if cand.has(u):
                                     val_conv = cand
+                                    preferred_used = True
                                     break
                             except Exception:
                                 pass
 
                     val = val_conv
 
-                    try:
-                        val = sp.simplify(convert_to(val, BASE_UNITS))
-                    except Exception:
-                        pass
+                    if not preferred_used:
+                        try:
+                            val = sp.simplify(convert_to(val, BASE_UNITS))
+                        except Exception:
+                            pass
 
                     symbol_names = {}
                     for name in user_vars:
@@ -600,7 +634,14 @@ def index():
                     if unit == 1:
                         mag_with_unit = mag_str
                     else:
-                        latex_unit = latex(unit)
+                        if sp.simplify(unit - W/(m*K)) == 0:
+                            latex_unit = r"\frac{\mathrm{W}}{\mathrm{m}\,\mathrm{K}}"
+                        elif sp.simplify(unit - W/(m**2*K)) == 0:
+                            latex_unit = r"\frac{\mathrm{W}}{\mathrm{m}^{2}\,\mathrm{K}}"
+                        elif sp.simplify(unit - J/(kg*K)) == 0:
+                            latex_unit = r"\frac{\mathrm{J}}{\mathrm{kg}\,\mathrm{K}}"
+                        else:
+                            latex_unit = latex(unit)
                         mag_with_unit = rf"{mag_str}\,{latex_unit}"
 
                     only_units_and_numbers = True
@@ -636,6 +677,7 @@ def index():
                         "content": rf"\text{{{safe_err}}}",
                     })
 
+            # Mehrere LaTeX-Items in einer Zeile zusammenfassen
             merged_items = []
             current_latex_parts = []
 
@@ -643,17 +685,14 @@ def index():
                 if item["type"] == "latex":
                     current_latex_parts.append(item["content"])
                 else:
-                    # if LaTeX was accumulated before, flush it as one item
                     if current_latex_parts:
                         merged_items.append({
                             "type": "latex",
                             "content": " \\quad ".join(current_latex_parts),
                         })
                         current_latex_parts = []
-                    # keep plot or other item types as-is
                     merged_items.append(item)
 
-            # append remaining LaTeX parts at the end
             if current_latex_parts:
                 merged_items.append({
                     "type": "latex",
@@ -667,22 +706,24 @@ def index():
 
     return render_template("index.html", code=user_input, results=results)
 
-def run_server():
-    """Run the Flask development server (debug disabled for PyInstaller builds)."""
-    app.run(host="127.0.0.1", port=5000, debug=False)
+
+def run_server(open_browser: bool, debug: bool):
+    if open_browser:
+        def _run():
+            app.run(host="127.0.0.1", port=5000, debug=debug)
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        time.sleep(1)
+        webbrowser.open("http://127.0.0.1:5000")
+        t.join()
+    else:
+        app.run(host="127.0.0.1", port=5000, debug=debug)
+
 
 if __name__ == "__main__":
-    # Start server in a background thread
-    t = threading.Thread(target=run_server, daemon=True)
-    t.start()
+    frozen = getattr(sys, "frozen", False)
 
-    # Give the server a moment to start
-    time.sleep(1)
-
-    # Open the application in the default web browser
-    webbrowser.open("http://127.0.0.1:5000")
-
-    # Keep the main thread alive so the program does not exit immediately
-    t.join()
-
-__version__ = "0.9.3"
+    if frozen:
+        run_server(open_browser=True, debug=False)
+    else:
+        run_server(open_browser=False, debug=True)
