@@ -29,7 +29,7 @@ The interface consists of a text editor on the left and a LaTeX/plot output area
   - explicit target units using the `|` syntax (for example `| kWh`, `| bar`)
 - Plotting function: `plot(f, x, xmin, xmax)` generates a PNG plot with Matplotlib and shows it in the browser
 - Text lines in double quotes are rendered as LaTeX text (for example section headers or comments)
-- Greek variable names (`alpha`, `beta`, `phi_1`, …) are automatically converted to the corresponding LaTeX symbols
+- Greek variables are automatically converted to the corresponding LaTeX symbols
 
 
 ## Requirements
