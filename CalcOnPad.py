@@ -1,192 +1,466 @@
 #!/usr/bin/env python3
 # Flask-based symbolic calculator with unit support and simple plotting
 
-import re
-import io
 import base64
-import threading
-import webbrowser
-import time
+import io
+import re
 import sys
-
-from flask import Flask, render_template, request
-
-import sympy as sp
-from sympy.physics.units import (
-    m, s, kg, N, J, A, K, mol, cd,
-    km, hour, minute, V, W, ohm,
-    kilo,
-    Pa, bar, atm,
-    liter, L,
-    R,
-    convert_to,
-)
-from sympy import latex
+import threading
+import time
+import webbrowser
+from dataclasses import dataclass, field
+from functools import lru_cache
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-
-
-def solve1(expr, var):
-    sols = sp.solve(expr, var)
-    if not sols:
-        raise ValueError("No solution found")
-    return sols[0]
-
+import sympy as sp
+from flask import Flask, render_template, request
+from sympy import latex
+from sympy.parsing.sympy_parser import parse_expr
+from sympy.physics.units import (
+    A, J, K, L, N, Pa, R, V, W, atm, bar, cd, centi, hour, kg, km,
+    liter, milli, minute, mol, m, ohm, s,
+    convert_to as sympy_convert_to,
+)
 
 app = Flask(__name__)
 sp.init_printing()
 
-# known units as names
-unit_ns = {
-    'm': m,
-    's': s,
-    'kg': kg,
-    'N': N,
-    'J': J,
-    'A': A,
-    'K': K,
-    'mol': mol,
-    'cd': cd,
-    'km': km,
-    'h': hour,
-    'min': minute,
-    'V': V,
-    'W': W,
-    'Ohm': ohm,
-    'Pa': Pa,
-    'bar': bar,
-    'atm': atm,
-    'L': L,
-    'liter': liter,
-    'R': R,
-    'degC': K,
-}
+UNIT_TOKEN_PREFIX = "__unit_"
+VAR_SYMBOL_PREFIX = "__varsym_"
+BASE_UNITS = (m, kg, s, A, K, mol, cd)
 
-# Wichtig: wir wollen nur ϑ eintippen, intern aber θ benutzen.
-# GREEK_VARS definiert die LaTeX-Namen für die Variablen.
+DEFAULT_INPUT = (
+    '"CalcOn Pad Version 1.0.1"\n'
+    '"A simple tool to perform engineering calculations, based on Sympy"\n'
+    "\n"
+    '"Example:"\n'
+    "a = 5'm/s^2 ; m = 10'kg\n"
+    "F = m * a\n"
+    "\n"
+    '"by P.Stein - HTWG Konstanz"\n'
+)
+
+UNIT_NS = {
+    "m": m,
+    "mm": milli * m,
+    "cm": centi * m,
+    "km": km,
+    "s": s,
+    "ms": milli * s,
+    "min": minute,
+    "h": hour,
+    "kg": kg,
+    "g": milli * kg,
+    "to": 1000 * kg,
+    "N": N,
+    "kN": 1000 * N,
+    "J": J,
+    "kJ": 1000 * J,
+    "MJ": 1_000_000 * J,
+    "W": W,
+    "kW": 1000 * W,
+    "MW": 1_000_000 * W,
+    "Pa": Pa,
+    "kPa": 1000 * Pa,
+    "MPa": 1_000_000 * Pa,
+    "bar": bar,
+    "atm": atm,
+    "A": A,
+    "V": V,
+    "Ohm": ohm,
+    "K": K,
+    "degC": K,
+    "mol": mol,
+    "kmol": 1000 * mol,
+    "cd": cd,
+    "L": L,
+    "liter": liter,
+    "Hz": 1 / s,
+    "rpm": 1 / minute,
+    "deg": sp.pi / 180,
+    "rad": 1,
+    "R": R,
+}
+UNIT_TOKEN_NS = {
+    f"{UNIT_TOKEN_PREFIX}{name}": value
+    for name, value in UNIT_NS.items()
+}
+UNIT_NAME_SET = frozenset(UNIT_NS.keys())
+UNIT_VALUES = tuple(
+    unit for unit in UNIT_NS.values()
+    if unit != 1 and not unit.is_number
+)
+
 GREEK_VARS = {
-    "α": r"\alpha",
-    "β": r"\beta",
-    "γ": r"\gamma",
-    "δ": r"\delta",
-    "ε": r"\epsilon",
-    "ζ": r"\zeta",
-    "η": r"\eta",
-    "θ": r"\vartheta",   # θ wird als \vartheta dargestellt
-    "λ": r"\lambda",
-    "μ": r"\mu",
-    "ν": r"\nu",
-    "ξ": r"\xi",
-    "π": r"\pi",
-    "ρ": r"\rho",
-    "σ": r"\sigma",
-    "τ": r"\tau",
-    "φ": r"\varphi",
-    "χ": r"\chi",
-    "ψ": r"\psi",
-    "ω": r"\omega",
+    "α": r"\alpha", "β": r"\beta", "γ": r"\gamma", "δ": r"\delta",
+    "ε": r"\epsilon", "ζ": r"\zeta", "η": r"\eta", "θ": r"\vartheta",
+    "ι": r"\iota", "κ": r"\kappa", "λ": r"\lambda", "μ": r"\mu",
+    "ν": r"\nu", "ξ": r"\xi", "π": r"\pi", "ρ": r"\rho",
+    "σ": r"\sigma", "τ": r"\tau", "υ": r"\upsilon", "φ": r"\varphi",
+    "χ": r"\chi", "ψ": r"\psi", "ω": r"\omega", "Γ": r"\Gamma",
+    "Δ": r"\Delta", "Λ": r"\Lambda", "Θ": r"\Theta", "Ξ": r"\Xi",
+    "Π": r"\Pi", "Σ": r"\Sigma", "Φ": r"\Phi", "Ψ": r"\Psi",
+    "Ω": r"\Omega",
 }
 
-# environment for numeric evaluation
-base_var_ns = {
-    'sp': sp,
-    'pi': sp.pi,
-    'sin': sp.sin,
-    'cos': sp.cos,
-    'exp': sp.exp,
-    'log': sp.log,
-    'sqrt': sp.sqrt,
-    'symbols': sp.symbols,
-    'integrate': sp.integrate,
-    'diff': sp.diff,
-    'x': sp.symbols('x'),
-    'y': sp.symbols('y'),
-    't_sym': sp.symbols('t'),
-    'Eq': sp.Eq,
-    'solve': sp.solve,
-    'solve1': solve1,
-}
-var_ns = dict(base_var_ns)
-user_vars = set()
-sym_exprs = {}
-reserved_names = set(unit_ns.keys())
+PRETTY_UNITS = (
+    (bar, r"\mathrm{bar}"),
+    (atm, r"\mathrm{atm}"),
+    (1_000_000 * Pa, r"\mathrm{MPa}"),
+    (1000 * Pa, r"\mathrm{kPa}"),
+    (Pa, r"\mathrm{Pa}"),
+    (1000 * N, r"\mathrm{kN}"),
+    (N, r"\mathrm{N}"),
+    (1_000_000 * J, r"\mathrm{MJ}"),
+    (1000 * J, r"\mathrm{kJ}"),
+    (J, r"\mathrm{J}"),
+    (1_000_000 * W, r"\mathrm{MW}"),
+    (1000 * W, r"\mathrm{kW}"),
+    (W, r"\mathrm{W}"),
+    (km, r"\mathrm{km}"),
+    (m, r"\mathrm{m}"),
+    (centi * m, r"\mathrm{cm}"),
+    (milli * m, r"\mathrm{mm}"),
+    (hour, r"\mathrm{h}"),
+    (minute, r"\mathrm{min}"),
+    (s, r"\mathrm{s}"),
+    (milli * s, r"\mathrm{ms}"),
+    (1000 * kg, r"\mathrm{t}"),
+    (kg, r"\mathrm{kg}"),
+    (milli * kg, r"\mathrm{g}"),
+    (1000 * mol, r"\mathrm{kmol}"),
+    (mol, r"\mathrm{mol}"),
+    (K, r"\mathrm{K}"),
+    (V, r"\mathrm{V}"),
+    (A, r"\mathrm{A}"),
+    (ohm, r"\mathrm{\Omega}"),
+    (1 / s, r"\mathrm{Hz}"),
+    (1 / minute, r"\mathrm{rpm}"),
+    (J / (kg * K), r"\frac{\mathrm{J}}{\mathrm{kg}\,\mathrm{K}}"),
+    (J / kg, r"\frac{\mathrm{J}}{\mathrm{kg}}"),
+    (W / (m * K), r"\frac{\mathrm{W}}{\mathrm{m}\,\mathrm{K}}"),
+    (W / (m**2 * K), r"\frac{\mathrm{W}}{\mathrm{m}^{2}\,\mathrm{K}}"),
+    (m**2 / s, r"\frac{\mathrm{m}^{2}}{\mathrm{s}}"),
+    (m**2, r"\mathrm{m}^{2}"),
+    (m**3, r"\mathrm{m}^{3}"),
+)
 
-# preferred target units (if no explicit target unit is given)
-preferred_units = [
-    N, W/(m*K), W/(m**2*K), W/m,
-    J,
-    W,
-    Pa, bar, atm,
-    V, A, ohm,
-]
-BASE_UNITS = [m, kg, s, A, K, mol, cd]
-
-
-# explicit desired units that can be specified via "| unit"
-# structure: name: (name, base_unit, factor)
-# factor = how many base units correspond to 1 of the desired unit
-desired_unit_map = {
-    "J":    (r"\mathrm{J}",    J,    1),
-    "kJ":   (r"\mathrm{kJ}",   J,   1000),
-    "MJ":   (r"\mathrm{MJ}",   J,   1_000_000),
-    "Ws":   (r"\mathrm{Ws}",   J,    1),
-    "Wh":   (r"\mathrm{Wh}",   J,    3600),
-    "kWh":  (r"\mathrm{kWh}",  J,    3_600_000),
-    "N":    (r"\mathrm{N}",    N,    1),
-    "W":    (r"\mathrm{W}",    W,    1),
-    "kW":   (r"\mathrm{kW}",   W,    1000),
-    "MW":   (r"\mathrm{MW}",   W,    1_000_000),
-    "Pa":   (r"\mathrm{Pa}",   Pa,   1),
-    "bar":  (r"\mathrm{bar}",  Pa,   100_000),
-    "m^2":  (r"\mathrm{m}^2",  m**2, 1),
+DESIRED_UNIT_MAP = {
+    "m": (r"\mathrm{m}", m, 1),
+    "mm": (r"\mathrm{mm}", m, 0.001),
+    "cm": (r"\mathrm{cm}", m, 0.01),
+    "km": (r"\mathrm{km}", m, 1000),
+    "m^2": (r"\mathrm{m}^2", m**2, 1),
     "cm^2": (r"\mathrm{cm}^2", m**2, 0.0001),
-    "m^3":  (r"\mathrm{m}^3",  m**3, 1),
-    "W/(m^2*K)": (r"\frac{\mathrm{W}}{\mathrm{m}^{2}\,\mathrm{K}}", W/(m**2*K), 1),
-    "W/(m*K)":   (r"\frac{\mathrm{W}}{\mathrm{m}\,\mathrm{K}}",     W/(m*K),    1),
-    "W/m":       (r"\frac{\mathrm{W}}{\mathrm{m}}",                 W/m,        1),
-    "J/(kg*K)":  (r"\frac{\mathrm{J}}{\mathrm{kg}\,\mathrm{K}}",    J/(kg*K),   1),
-    "degC":      (r"^\circ\mathrm{C}",                              K,          1),
+    "m^3": (r"\mathrm{m}^3", m**3, 1),
+    "s": (r"\mathrm{s}", s, 1),
+    "ms": (r"\mathrm{ms}", s, 0.001),
+    "min": (r"\mathrm{min}", s, 60),
+    "h": (r"\mathrm{h}", s, 3600),
+    "kg": (r"\mathrm{kg}", kg, 1),
+    "g": (r"\mathrm{g}", kg, 0.001),
+    "to": (r"\mathrm{t}", kg, 1000),
+    "mol": (r"\mathrm{mol}", mol, 1),
+    "kmol": (r"\mathrm{kmol}", mol, 1000),
+    "N": (r"\mathrm{N}", N, 1),
+    "kN": (r"\mathrm{kN}", N, 1000),
+    "J": (r"\mathrm{J}", J, 1),
+    "kJ": (r"\mathrm{kJ}", J, 1000),
+    "MJ": (r"\mathrm{MJ}", J, 1_000_000),
+    "Ws": (r"\mathrm{Ws}", J, 1),
+    "Wh": (r"\mathrm{Wh}", J, 3600),
+    "kWh": (r"\mathrm{kWh}", J, 3_600_000),
+    "W": (r"\mathrm{W}", W, 1),
+    "kW": (r"\mathrm{kW}", W, 1000),
+    "MW": (r"\mathrm{MW}", W, 1_000_000),
+    "Pa": (r"\mathrm{Pa}", Pa, 1),
+    "kPa": (r"\mathrm{kPa}", Pa, 1000),
+    "MPa": (r"\mathrm{MPa}", Pa, 1_000_000),
+    "bar": (r"\mathrm{bar}", Pa, 100_000),
+    "atm": (r"\mathrm{atm}", Pa, 101325),
+    "K": (r"\mathrm{K}", K, 1),
+    "degC": (r"^\circ\mathrm{C}", K, 1),
+    "Hz": (r"\mathrm{Hz}", 1 / s, 1),
+    "rpm": (r"\mathrm{rpm}", 1 / s, sp.Rational(1, 60)),
+    "deg": (r"^\circ", 1, sp.pi / 180),
+    "rad": (r"\mathrm{rad}", 1, 1),
+    "W/(m^2*K)": (r"\frac{\mathrm{W}}{\mathrm{m}^{2}\,\mathrm{K}}", W / (m**2 * K), 1),
+    "W/(m*K)": (r"\frac{\mathrm{W}}{\mathrm{m}\,\mathrm{K}}", W / (m * K), 1),
+    "W/m": (r"\frac{\mathrm{W}}{\mathrm{m}}", W / m, 1),
+    "J/(kg*K)": (r"\frac{\mathrm{J}}{\mathrm{kg}\,\mathrm{K}}", J / (kg * K), 1),
+    "kJ/(kg*K)": (r"\frac{\mathrm{kJ}}{\mathrm{kg}\,\mathrm{K}}", J / (kg * K), 1000),
+    "J/kg": (r"\frac{\mathrm{J}}{\mathrm{kg}}", J / kg, 1),
+    "kJ/kg": (r"\frac{\mathrm{kJ}}{\mathrm{kg}}", J / kg, 1000),
 }
 
-# apostrophe syntax for units, e.g. 10'J, 3's, 5'm etc.
-unit_names = "|".join(re.escape(u) for u in unit_ns.keys())
-unit_pattern = re.compile(rf"(?P<num>\d+(\.\d+)?|\b\w+\b)\s*'(?P<unit>{unit_names})")
+UNIT_NAMES_REGEX = "|".join(sorted((re.escape(name) for name in UNIT_NS), key=len, reverse=True))
+UNIT_PATTERN = re.compile(
+    rf"(?P<num>\d+(\.\d+)?|\b\w+\b)\s*'(?P<unit>{UNIT_NAMES_REGEX})"
+)
+
+
+def my_solve(*args, **kwargs):
+    result = sp.solve(*args, **kwargs)
+    if isinstance(result, list) and len(result) == 1 and not isinstance(result[0], dict):
+        return result[0]
+    return result
+
+
+def _log_base_10(x, b=10):
+    return sp.log(x, b)
+
+
+def _vec(*args):
+    return sp.Matrix(args)
+
+
+def _transpose(matrix):
+    return matrix.T
+
+
+def _det(matrix):
+    return matrix.det()
+
+
+def _inv(matrix):
+    return matrix.inv()
+
+
+def _dot(a, b):
+    return a.dot(b)
+
+
+def _cross(a, b):
+    return a.cross(b)
+
+
+def _norm(a):
+    return a.norm()
+
+
+def _solve_linear(A, b):
+    return A.LUsolve(b)
+
+
+def _rank(A):
+    return sp.Integer(A.rank())
+
+
+def _trace(A):
+    return A.trace()
+
+
+COMMON_EVAL_FUNCTIONS = {
+    "sp": sp,
+    "π": sp.pi,
+    "pi": sp.pi,
+    "sin": sp.sin,
+    "cos": sp.cos,
+    "asin": sp.asin,
+    "acos": sp.acos,
+    "atan": sp.atan,
+    "atan2": sp.atan2,
+    "sinh": sp.sinh,
+    "cosh": sp.cosh,
+    "tanh": sp.tanh,
+    "asinh": sp.asinh,
+    "acosh": sp.acosh,
+    "atanh": sp.atanh,
+    "exp": sp.exp,
+    "ln": sp.log,
+    "log": _log_base_10,
+    "sqrt": sp.sqrt,
+    "symbols": sp.symbols,
+    "Eq": sp.Eq,
+    "solve": my_solve,
+    "nsolve": sp.nsolve,
+    "vec": _vec,
+    "mat": sp.Matrix,
+    "eye": sp.eye,
+    "zeros": sp.zeros,
+    "ones": sp.ones,
+    "det": _det,
+    "inv": _inv,
+    "T": _transpose,
+    "dot": _dot,
+    "cross": _cross,
+    "norm": _norm,
+    "solve_linear": _solve_linear,
+    "eigenvals": lambda A: A.eigenvals(),
+    "eigenvects": lambda A: A.eigenvects(),
+    "rank": _rank,
+    "trace": _trace,
+}
+
+NUMERIC_FUNCTIONS = {
+    **COMMON_EVAL_FUNCTIONS,
+    "integrate": sp.integrate,
+    "diff": sp.diff,
+    "sum": sp.summation,
+    "summe": sp.summation,
+    "prod": sp.product,
+    "produkt": sp.product,
+    "lim": sp.limit,
+    "x": sp.Symbol("x"),
+    "y": sp.Symbol("y"),
+    "t_sym": sp.Symbol("t"),
+}
+
+DISPLAY_FUNCTIONS = {
+    **COMMON_EVAL_FUNCTIONS,
+    "integrate": sp.Integral,
+    "diff": sp.Derivative,
+    "sum": sp.Sum,
+    "summe": sp.Sum,
+    "prod": sp.Product,
+    "produkt": sp.Product,
+    "lim": sp.Limit,
+    "x": sp.Symbol("x"),
+    "y": sp.Symbol("y"),
+    "t_sym": sp.Symbol("t"),
+}
+
+PLOT_FUNCTIONS = {
+    **COMMON_EVAL_FUNCTIONS,
+    "integrate": sp.Integral,
+    "diff": sp.Derivative,
+    "sum": sp.Sum,
+    "summe": sp.Sum,
+    "prod": sp.Product,
+    "produkt": sp.Product,
+    "lim": sp.Limit,
+    "x": sp.Symbol("x"),
+    "y": sp.Symbol("y"),
+    "t_sym": sp.Symbol("t"),
+}
+
+
+def normalize_identifiers(text: str) -> str:
+    return text.replace("ϑ", "θ")
+
+
+def normalize_power_ops(expr: str) -> str:
+    return expr.replace("^", "**") if "^" in expr else expr
 
 
 def expand_units(expr: str) -> str:
-    def repl(m):
-        num = m.group("num")
-        unit = m.group("unit")
-        if "." not in num:
-            num = num + ".0"
+    def repl(match):
+        number = match.group("num")
+        unit = match.group("unit")
+        if "." not in number and not number.isidentifier():
+            number = f"{number}.0"
         if unit == "degC":
-            return f"({num} + 273.15) * K"
-        return f"{num} * {unit}"
+            return f"({number} + 273.15) * {UNIT_TOKEN_PREFIX}K"
+        return f"{number} * {UNIT_TOKEN_PREFIX}{unit}"
+    return UNIT_PATTERN.sub(repl, expr)
 
-    # hier könnte man auch ϑ->θ machen, ist aber schon in eval_line erledigt
-    return unit_pattern.sub(repl, expr)
+
+def split_top_level(text: str, delimiter: str) -> list[str]:
+    parts = []
+    current = []
+    depth = 0
+    quote = None
+
+    for char in text:
+        if quote:
+            current.append(char)
+            if char == quote:
+                quote = None
+            continue
+
+        if char == '"':
+            current.append(char)
+            quote = char
+            continue
+
+        if char in "([{":
+            depth += 1
+            current.append(char)
+            continue
+
+        if char in ")]}":
+            depth = max(0, depth - 1)
+            current.append(char)
+            continue
+
+        if char == delimiter and depth == 0:
+            part = "".join(current).strip()
+            if part:
+                parts.append(part)
+            current = []
+            continue
+
+        current.append(char)
+
+    tail = "".join(current).strip()
+    if tail:
+        parts.append(tail)
+
+    return parts
+
+
+@lru_cache(maxsize=4096)
+def _convert_to_cached(expr, frozen_target):
+    real_target = list(frozen_target) if isinstance(frozen_target, tuple) else frozen_target
+    return sympy_convert_to(expr, real_target)
+
+
+def freeze_target(target):
+    return tuple(target) if isinstance(target, list) else target
+
+
+def convert_to_cached(expr, target):
+    return _convert_to_cached(expr, freeze_target(target))
+
+
+
+@lru_cache(maxsize=4096)
+def _expr_to_latex_cached(expr, user_vars_key):
+    symbol_names = {}
+    free_symbols = getattr(expr, "free_symbols", set())
+
+    for sym in free_symbols:
+        if sym in UNIT_VALUES:
+            continue
+        sym_name = str(sym)
+        if sym_name.startswith(VAR_SYMBOL_PREFIX):
+            sym_name = sym_name[len(VAR_SYMBOL_PREFIX):]
+        symbol_names[sym] = var_to_latex(sym_name)
+
+    for name in user_vars_key:
+        sym = sp.Symbol(name)
+        if sym not in UNIT_VALUES:
+            symbol_names[sym] = var_to_latex(name)
+
+    return latex(
+        expr,
+        mul_symbol=r"\cdot",
+        symbol_names=symbol_names,
+    ).replace(r"\cdot", r"\cdot{}")
+
+
+def expr_to_latex(expr, user_vars):
+    return _expr_to_latex_cached(expr, tuple(sorted(user_vars)))
 
 
 def split_magnitude_unit(expr):
-    expr = sp.simplify(expr)
-
-    if not expr.has(*unit_ns.values()):
+    if not hasattr(expr, "has") or not expr.has(*UNIT_VALUES):
         return expr, 1
 
     if isinstance(expr, sp.Mul):
         mag_factors = []
         unit_factors = []
-        for f in expr.args:
-            if f.has(*unit_ns.values()):
-                unit_factors.append(f)
+        for factor in expr.args:
+            if factor.has(*UNIT_VALUES):
+                unit_factors.append(factor)
             else:
-                mag_factors.append(f)
-        mag = sp.Mul(*mag_factors) if mag_factors else 1
+                mag_factors.append(factor)
+        magnitude = sp.Mul(*mag_factors) if mag_factors else 1
         unit = sp.Mul(*unit_factors) if unit_factors else 1
-        return mag, unit
+        return magnitude, unit
 
     return 1, expr
 
@@ -197,12 +471,18 @@ def format_magnitude_decimal(mag, digits=3):
     except Exception:
         mag_num = mag
 
-    if mag_num.is_real:
+    if getattr(mag_num, "is_real", False):
         try:
-            fval = float(mag_num)
-            s = f"{fval:.{digits}f}"
-            s = s.rstrip('0').rstrip('.')
-            return s
+            value = float(mag_num)
+            absval = abs(value)
+            if absval != 0 and (absval < 1e-3 or absval >= 1e4):
+                sci = f"{value:.{digits}e}"
+                base, exp = sci.split("e")
+                base = base.rstrip("0").rstrip(".")
+                exp = exp.lstrip("+0") or "0"
+                return rf"{base}\cdot 10^{{{exp}}}"
+            fixed = f"{value:.{digits}f}".rstrip("0").rstrip(".")
+            return fixed if fixed else "0"
         except Exception:
             pass
 
@@ -210,53 +490,35 @@ def format_magnitude_decimal(mag, digits=3):
 
 
 def var_to_latex(var_name: str) -> str:
-    """
-    Konvertiert einen Variablennamen in LaTeX.
-    Unterstützt u.a.:
-      - einfache griechische Buchstaben
-      - Indizes mit '_'
-      - Δ + griechischer Buchstabe, z.B. "Δθ" -> \Delta\vartheta
-    """
+    if var_name.startswith(VAR_SYMBOL_PREFIX):
+        var_name = var_name[len(VAR_SYMBOL_PREFIX):]
 
-    # Einmal: ϑ -> θ normalisieren, falls doch irgendwo auftaucht
-    var_name = var_name.replace("ϑ", "θ")
+    var_name = normalize_identifiers(var_name)
 
-    # Spezialfall: Delta + griechischer Buchstabe, z.B. "Δθ"
     if var_name.startswith("Δ") and "_" not in var_name:
         base = var_name[1:]
         if base in GREEK_VARS:
             return r"\Delta" + GREEK_VARS[base]
 
-    # greek variable names without index
-    if '_' not in var_name:
-        if var_name in GREEK_VARS:
-            return GREEK_VARS[var_name]
-        return var_name
+    if "_" not in var_name:
+        return GREEK_VARS.get(var_name, var_name)
 
-    # variable names with index, e.g. phi_1, alpha_tot, delta_theta, delta_theta_1
-    base, index = var_name.split('_', 1)
+    base, index = var_name.split("_", 1)
+    base = normalize_identifiers(base)
+    index = normalize_identifiers(index)
 
-    # Normalisierung auch hier:
-    base = base.replace("ϑ", "θ")
-    index = index.replace("ϑ", "θ")
-
-    if base in GREEK_VARS:
-        base_latex = GREEK_VARS[base]
+    if base.startswith("Δ") and base[1:] in GREEK_VARS:
+        base_latex = r"\Delta" + GREEK_VARS[base[1:]]
     else:
-        base_latex = base
+        base_latex = GREEK_VARS.get(base, base)
 
     if index in GREEK_VARS:
-        index_latex = GREEK_VARS[index]
-        return rf"{base_latex}{index_latex}"
+        return rf"{base_latex}{GREEK_VARS[index]}"
 
-    if '_' in index:
-        index_base, index_suffix = index.split('_', 1)
-        index_base = index_base.replace("ϑ", "θ")
-        if index_base in GREEK_VARS:
-            index_base_latex = GREEK_VARS[index_base]
-        else:
-            index_base_latex = index_base
-
+    if "_" in index:
+        index_base, index_suffix = index.split("_", 1)
+        index_base = normalize_identifiers(index_base)
+        index_base_latex = GREEK_VARS.get(index_base, index_base)
         safe_suffix = index_suffix.replace("\\", r"\\").replace("_", r"\_")
         return rf"{base_latex}{index_base_latex}_{{\text{{{safe_suffix}}}}}"
 
@@ -264,99 +526,190 @@ def var_to_latex(var_name: str) -> str:
     return rf"{base_latex}_{{\text{{{safe_index}}}}}"
 
 
-def eval_line(line: str):
-    """
-    Evaluate a single input line.
+def has_only_units_and_numbers(expr):
+    free_symbols = getattr(expr, "free_symbols", set())
+    return all(sym in UNIT_VALUES for sym in free_symbols)
 
-    Returns:
-      - var:          variable name or None
-      - expr_sym:     symbolic SymPy expression
-      - expr_num:     numeric SymPy expression
-      - val:          simplified result (including units)
-      - desired_unit: tuple (name, base_unit, factor) or None
-    """
-    global sym_exprs
-    line = line.strip()
 
-    # WICHTIG: Benutzer tippt ϑ, intern benutzen wir θ
-    line = line.replace("ϑ", "θ")
+def unit_to_pretty_latex(unit):
+    for candidate, latex_str in PRETTY_UNITS:
+        try:
+            ratio = convert_to_cached(unit / candidate, BASE_UNITS)
+            if not ratio.has(*UNIT_VALUES) and ratio == 1:
+                return latex_str
+        except Exception:
+            continue
 
-    if not line:
-        return None, None, None, None, None
+    try:
+        unit_base = convert_to_cached(unit, BASE_UNITS)
+    except Exception:
+        unit_base = unit
+    return latex(unit_base)
 
-    desired_unit = None
 
-    # environment for numeric evaluation
-    env = {}
-    env.update(unit_ns)
-    env.update(var_ns)
+def is_dimensionless_number(val):
+    try:
+        val_simpl = convert_to_cached(val, BASE_UNITS)
+    except Exception:
+        val_simpl = val
 
-    # environment for symbolic representation
-    env_syms = {}
-    env_syms.update(unit_ns)
-    env_syms.update({
-        'pi': sp.pi,
-        'sin': sp.sin,
-        'cos': sp.cos,
-        'exp': sp.exp,
-        'integrate': sp.Integral,
-        'diff': sp.Derivative,
-        'sqrt': sp.sqrt,
-        'symbols': sp.symbols,
-        'x': sp.symbols('x'),
-        'y': sp.symbols('y'),
-        't_sym': sp.symbols('t'),
-        'Eq': sp.Eq,
-    })
-    for name in user_vars:
-        env_syms[name] = sp.Symbol(name)
+    if isinstance(val_simpl, (list, tuple, dict)):
+        return None
 
-    if '=' in line:
-        var_part, rhs_part = line.split('=', 1)
-        var = var_part.strip()
-        rhs_raw = rhs_part.strip()
+    mag, unit = split_magnitude_unit(val_simpl)
+    if unit != 1:
+        return None
+    if bool(getattr(mag, "is_number", False)):
+        return sp.N(mag)
+    return None
 
-        if var in reserved_names:
-            raise NameError(f"'{var}' is reserved as a unit and cannot be used as a variable.")
 
-        # parse desired unit to the right of "|"
-        if '|' in rhs_raw:
-            rhs_core, desired = rhs_raw.split('|', 1)
-            rhs_core = rhs_core.strip()
-            desired_name = desired.strip()
-            if desired_name:
-                if desired_name not in desired_unit_map:
-                    raise ValueError(f"Unknown desired unit '{desired_name}'")
-                desired_unit = desired_unit_map[desired_name]
+def make_safe_text_latex(text: str) -> str:
+    return text.replace("\\", r"\\").replace("_", r"\_")
+
+
+def error_to_latex(prefix: str, exc: Exception) -> str:
+    safe = f"{prefix} -- {exc}".replace("\\", r"\\").replace("_", r"\_")
+    return rf"\text{{{safe}}}"
+
+
+@dataclass
+class EvaluationContext:
+    var_ns: dict = field(default_factory=lambda: dict(NUMERIC_FUNCTIONS))
+    user_vars: set = field(default_factory=set)
+    sym_exprs: dict = field(default_factory=dict)
+
+    def make_eval_env(self, mode: str = "numeric") -> dict:
+        if mode == "numeric":
+            base = NUMERIC_FUNCTIONS
+        elif mode == "display":
+            base = DISPLAY_FUNCTIONS
+        elif mode == "plot":
+            base = PLOT_FUNCTIONS
         else:
-            rhs_core = rhs_raw
+            raise ValueError(f"Unknown mode: {mode}")
 
-        rhs_expanded = expand_units(rhs_core)
+        env = {}
+        env.update(UNIT_NS)
+        env.update(UNIT_TOKEN_NS)
+        env.update(base)
 
-        expr_num = sp.sympify(rhs_expanded, locals=env)
-        val = sp.simplify(expr_num)
+        if mode == "numeric":
+            env.update(self.var_ns)
+        else:
+            for name in self.user_vars:
+                if name == "sol":
+                    continue
+                env[name] = sp.Symbol(name)
 
-        expr_sym = sp.sympify(rhs_expanded, locals=env_syms)
+        for name in UNIT_NS:
+            token = f"{VAR_SYMBOL_PREFIX}{name}"
+            env[token] = sp.Symbol(token)
 
-        var_ns[var] = val
-        user_vars.add(var)
+        return env
 
-        sym_exprs[var] = expr_sym
+    def protect_assigned_unit_name(self, rhs: str, var_name: str, env: dict) -> str:
+        if var_name not in UNIT_NS:
+            return rhs
 
-        return var, expr_sym, expr_num, val, desired_unit
+        token = f"{VAR_SYMBOL_PREFIX}{var_name}"
+        env[token] = sp.Symbol(token)
 
-    else:
-        line_expanded = expand_units(line)
-        expr_num = sp.sympify(line_expanded, locals=env)
-        val = sp.simplify(expr_num)
-        expr_sym = sp.sympify(line_expanded, locals=env_syms)
-        return None, expr_sym, expr_num, val, None
+        return re.sub(
+            rf"(?<=\(|,)\s*{re.escape(var_name)}\s*(?=,|\))",
+            token,
+            rhs,
+        )
+
+    def prepare_expression(self, expr: str) -> str:
+        prepared = normalize_identifiers(expr.strip())
+        prepared = normalize_power_ops(prepared)
+        prepared = expand_units(prepared)
+        return prepared
+
+    def parse_assignment(self, rhs_raw: str):
+        desired_unit = None
+        if "|" in rhs_raw:
+            rhs_core, desired_name = rhs_raw.split("|", 1)
+            rhs_core = rhs_core.strip()
+            desired_name = desired_name.strip()
+
+            if desired_name:
+                if desired_name not in DESIRED_UNIT_MAP:
+                    raise ValueError(f"Unknown desired unit '{desired_name}'")
+                desired_unit = DESIRED_UNIT_MAP[desired_name]
+
+            return rhs_core, desired_unit
+
+        return rhs_raw, desired_unit
+
+    def eval_line(self, line: str):
+        line = normalize_identifiers(line.strip())
+        if not line:
+            return None, None, None, None, None
+
+        env_num = self.make_eval_env("numeric")
+        env_display = self.make_eval_env("display")
+
+        if "=" in line:
+            var_part, rhs_part = line.split("=", 1)
+            var_name = var_part.strip()
+            rhs_core, desired_unit = self.parse_assignment(rhs_part.strip())
+
+            rhs_for_num = self.protect_assigned_unit_name(rhs_core, var_name, env_num)
+            rhs_for_display = self.protect_assigned_unit_name(rhs_core, var_name, env_display)
+
+            prepared_num = self.prepare_expression(rhs_for_num)
+            prepared_display = self.prepare_expression(rhs_for_display)
+
+            expr_num = sp.sympify(prepared_num, locals=env_num)
+            try:
+                expr_disp = parse_expr(prepared_display, local_dict=env_display, evaluate=False)
+            except Exception:
+                expr_disp = expr_num
+
+            value = expr_num
+            stored_value = is_dimensionless_number(value)
+            self.var_ns[var_name] = value if stored_value is None else stored_value
+            self.user_vars.add(var_name)
+            self.sym_exprs[var_name] = expr_num
+
+            return var_name, expr_disp, expr_num, value, desired_unit
+
+        prepared_num = self.prepare_expression(line)
+        expr_num = sp.sympify(prepared_num, locals=env_num)
+
+        try:
+            expr_disp = parse_expr(prepared_num, local_dict=env_display, evaluate=False)
+        except Exception:
+            expr_disp = expr_num
+
+        return None, expr_disp, expr_num, expr_num, None
+
+    def parse_plot_call(self, stripped: str):
+        inner = stripped[5:-1]
+        args = split_top_level(normalize_identifiers(inner), ",")
+        if len(args) < 2:
+            raise ValueError("plot(f, x, [xmin, xmax]) expected.")
+        return args
+
+    def eval_plot_bound(self, expr: str):
+        env = self.make_eval_env("plot")
+        prepared = self.prepare_expression(expr)
+        return sp.N(sp.sympify(prepared, locals=env))
+
+    def resolve_plot_expression(self, expr_text: str):
+        expr_text = normalize_power_ops(normalize_identifiers(expr_text))
+        if expr_text in self.sym_exprs:
+            return self.sym_exprs[expr_text]
+
+        env = self.make_eval_env("plot")
+        prepared = self.prepare_expression(expr_text)
+        return sp.sympify(prepared, locals=env)
 
 
 def create_plot(expr_sym, var_symbol, x_min=-10, x_max=10, num_points=400):
-    """Create a plot and return it as a Base64 data URL (data:image/png;...)."""
     f_num = sp.lambdify(var_symbol, expr_sym, "numpy")
-
     xs = np.linspace(float(x_min), float(x_max), num_points)
     ys = f_num(xs)
 
@@ -376,333 +729,177 @@ def create_plot(expr_sym, var_symbol, x_min=-10, x_max=10, num_points=400):
     return "data:image/png;base64," + img_base64
 
 
+def render_plain_text_item(text: str) -> dict:
+    if text.startswith("!"):
+        return {"type": "latex", "content": text[1:]}
+    return {"type": "latex", "content": rf"\text{{{make_safe_text_latex(text)}}}"}
+
+
+def format_computation_result(var, expr_sym, val, desired_unit, symbolic_only, ctx: EvaluationContext):
+    if isinstance(val, (list, tuple, dict, sp.MatrixBase)) or isinstance(expr_sym, (list, tuple, dict, sp.MatrixBase)):
+        latex_expr = latex(val)
+        if var is None:
+            return {"type": "latex", "content": latex_expr}
+        return {"type": "latex", "content": rf"{var_to_latex(var)} = {latex_expr}"}
+
+    latex_expr = expr_to_latex(expr_sym, ctx.user_vars)
+
+    if symbolic_only:
+        if var is None:
+            return {"type": "latex", "content": latex_expr}
+        return {"type": "latex", "content": rf"{var_to_latex(var)} = {latex_expr}"}
+
+    only_units_and_numbers = has_only_units_and_numbers(expr_sym)
+
+    if desired_unit is not None:
+        unit_label, base_unit, factor = desired_unit
+        try:
+            val_base = convert_to_cached(val, base_unit)
+        except Exception as exc:
+            raise ValueError(f"Conversion to desired unit failed: {exc}") from exc
+
+        mag_base, unit_base = split_magnitude_unit(val_base)
+        ratio = convert_to_cached(unit_base / base_unit, BASE_UNITS)
+        if ratio.has(*UNIT_VALUES):
+            raise ValueError(
+                f"Desired unit '{unit_label}' is not dimensionally compatible with the expression."
+            )
+
+        if base_unit == K and unit_label.startswith(r"^\circ"):
+            mag = mag_base - 273.15
+        else:
+            mag = mag_base / factor
+
+        mag_with_unit = rf"{format_magnitude_decimal(mag, digits=3)}\,{unit_label}"
+    else:
+        try:
+            value_for_output = convert_to_cached(val, BASE_UNITS)
+        except Exception:
+            value_for_output = val
+
+        mag, unit = split_magnitude_unit(value_for_output)
+        mag_str = format_magnitude_decimal(mag, digits=3)
+
+        try:
+            unit_simpl = convert_to_cached(unit, BASE_UNITS)
+        except Exception:
+            unit_simpl = unit
+
+        if unit == 1 or not unit_simpl.has(*UNIT_VALUES):
+            mag_with_unit = mag_str
+        else:
+            mag_with_unit = rf"{mag_str}\,{unit_to_pretty_latex(unit)}"
+
+    if var is None:
+        return {"type": "latex", "content": rf"{latex_expr} = {mag_with_unit}"}
+
+    var_latex = var_to_latex(var)
+    if only_units_and_numbers:
+        return {"type": "latex", "content": rf"{var_latex} = {mag_with_unit}"}
+    return {"type": "latex", "content": rf"{var_latex} = {latex_expr} = {mag_with_unit}"}
+
+
+def merge_latex_items(block_items):
+    merged = []
+    current_parts = []
+
+    for item in block_items:
+        if item["type"] == "latex":
+            current_parts.append(item["content"])
+            continue
+
+        if current_parts:
+            merged.append({"type": "latex", "content": r" \quad ".join(current_parts)})
+            current_parts = []
+
+        merged.append(item)
+
+    if current_parts:
+        merged.append({"type": "latex", "content": r" \quad ".join(current_parts)})
+
+    return merged
+
+
+def evaluate_code(user_input: str):
+    ctx = EvaluationContext()
+    results = []
+
+    for line_no, raw_line in enumerate(user_input.splitlines(), start=1):
+        parts = split_top_level(raw_line, ";")
+        if not parts:
+            results.append([{"type": "spacer"}])
+            continue
+
+        block_items = []
+
+        for part in parts:
+            stripped = part.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+
+            if stripped.startswith('"') and stripped.endswith('"') and len(stripped) >= 2:
+                block_items.append(render_plain_text_item(stripped[1:-1]))
+                continue
+
+            if stripped.startswith("plot(") and stripped.endswith(")"):
+                try:
+                    args = ctx.parse_plot_call(stripped)
+                    func_expr = ctx.resolve_plot_expression(args[0])
+                    var_symbol = sp.Symbol(normalize_identifiers(args[1]))
+                    x_min = ctx.eval_plot_bound(args[2]) if len(args) >= 3 else -10
+                    x_max = ctx.eval_plot_bound(args[3]) if len(args) >= 4 else 10
+                    block_items.append({
+                        "type": "plot",
+                        "src": create_plot(func_expr, var_symbol, x_min, x_max),
+                    })
+                except Exception as exc:
+                    block_items.append({
+                        "type": "latex",
+                        "content": rf"\text{{{make_safe_text_latex(f'Error while plotting: {exc}')}}}",
+                    })
+                continue
+
+            try:
+                symbolic_only = False
+                line_for_eval = stripped
+                if ":=" in stripped:
+                    symbolic_only = True
+                    line_for_eval = stripped.replace(":=", "=", 1)
+
+                var, expr_sym, expr_num, val, desired_unit = ctx.eval_line(line_for_eval)
+                if expr_sym is None or val is None:
+                    continue
+
+                block_items.append(
+                    format_computation_result(
+                        var=var,
+                        expr_sym=expr_sym,
+                        val=val,
+                        desired_unit=desired_unit,
+                        symbolic_only=symbolic_only,
+                        ctx=ctx,
+                    )
+                )
+            except Exception as exc:
+                block_items.append({
+                    "type": "latex",
+                    "content": error_to_latex(f"Error in line {line_no}: {stripped}", exc),
+                })
+
+        if block_items:
+            results.append(merge_latex_items(block_items))
+
+    return results
+
+
 @app.route("/", methods=["GET", "POST"])
 def index():
-    default_input = (
-        '"Example calculation with units"\n'
-        "v = 10'm/s ; t = 3's ; m_ = 10'kg\n"
-        "F = m_ * v / t|N\n"
-        "\n"
-        '"Symbolic"\n'
-        "f = x^2\n"
-        "diff(f, x)\n"
-        "integrate(f, (x, 0, 5))\n"
-        "plot(f, x, -5, 5)\n"
-        "\n"
-        '"Equation solver"\n'
-        "x = 3\n"
-        "y = 20\n"
-        "z = solve1(Eq(y, 3*x + z^2), z)\n"
-    )
-
-    user_input = default_input
+    user_input = DEFAULT_INPUT
     results = []
 
     if request.method == "POST":
-        global var_ns, user_vars, sym_exprs
-        var_ns = dict(base_var_ns)
-        user_vars = set()
-        sym_exprs = {}
-
         user_input = request.form.get("code", "")
-        lines = user_input.splitlines()
-        line_no = 0
-
-        for raw in lines:
-            line_no += 1
-            parts = [p.strip() for p in raw.split(';') if p.strip()]
-            if not parts:
-                results.append([{"type": "spacer"}])
-                continue
-
-            block_items = []
-
-            for part in parts:
-                stripped = part.strip()
-                if not stripped or stripped.startswith("#"):
-                    continue
-
-                # text lines in double quotes
-                if (stripped.startswith('"') and stripped.endswith('"')
-                        and len(stripped) >= 2):
-                    text = stripped[1:-1]
-
-                    if text.startswith("!"):
-                        raw_latex = text[1:]
-                        block_items.append({
-                            "type": "latex",
-                            "content": raw_latex,
-                        })
-                        continue
-
-                    safe_text = (
-                        text
-                        .replace("\\", r"\\")
-                        .replace("_", r"\_")
-                    )
-                    block_items.append({
-                        "type": "latex",
-                        "content": rf"\text{{{safe_text}}}",
-                    })
-                    continue
-
-                # ---------------- plot command ----------------
-                if stripped.startswith("plot(") and stripped.endswith(")"):
-                    try:
-                        inner = stripped[5:-1]
-
-                        # auch hier ϑ -> θ normalisieren
-                        inner = inner.replace("ϑ", "θ")
-
-                        args = [a.strip() for a in inner.split(",")]
-
-                        if len(args) < 2:
-                            raise ValueError("plot(f, x, [xmin, xmax]) expected.")
-
-                        env_syms = {}
-                        env_syms.update(unit_ns)
-                        env_syms.update({
-                            'pi': sp.pi,
-                            'sin': sp.sin,
-                            'cos': sp.cos,
-                            'exp': sp.exp,
-                            'integrate': sp.Integral,
-                            'diff': sp.Derivative,
-                            'sqrt': sp.sqrt,
-                            'symbols': sp.symbols,
-                            'x': sp.symbols('x'),
-                            'y': sp.symbols('y'),
-                            't_sym': sp.symbols('t'),
-                            'Eq': sp.Eq,
-                        })
-                        for name in user_vars:
-                            env_syms[name] = sp.Symbol(name)
-
-                        func_name = args[0]
-
-                        # falls trotzdem noch ϑ drin – sicherheitshalber:
-                        func_name = func_name.replace("ϑ", "θ")
-
-                        if func_name in sym_exprs:
-                            f_expr = sym_exprs[func_name]
-                        else:
-                            f_expr = sp.sympify(func_name, locals=env_syms)
-
-                        var_symbol = sp.Symbol(args[1])
-
-                        if len(args) >= 3:
-                            x_min = sp.N(sp.sympify(args[2], locals=env_syms))
-                        else:
-                            x_min = -10
-                        if len(args) >= 4:
-                            x_max = sp.N(sp.sympify(args[3], locals=env_syms))
-                        else:
-                            x_max = 10
-
-                        img_data = create_plot(f_expr, var_symbol, x_min, x_max)
-                        block_items.append({
-                            "type": "plot",
-                            "src": img_data,
-                        })
-                    except Exception as e:
-                        safe_err = (
-                            f"Error while plotting: {str(e)}"
-                            .replace("\\", r"\\")
-                            .replace("_", r"\_")
-                        )
-                        block_items.append({
-                            "type": "latex",
-                            "content": rf"\text{{{safe_err}}}",
-                        })
-                    continue
-                # -------------- end plot command --------------
-
-                # regular computation lines
-                try:
-                    var, expr_sym, expr_num, val, desired_unit = eval_line(stripped)
-                    if expr_sym is None or val is None:
-                        continue
-
-                    if isinstance(val, (list, tuple, dict)) or isinstance(expr_sym, (list, tuple, dict)):
-                        latex_expr = latex(val)
-                        if var is not None:
-                            var_latex = var_to_latex(var)
-                            full_latex = rf"{var_latex} = {latex_expr}"
-                        else:
-                            full_latex = latex_expr
-
-                        block_items.append({
-                            "type": "latex",
-                            "content": full_latex,
-                        })
-                        continue
-
-                    val_conv = val
-                    preferred_used = False
-
-                    if desired_unit is not None:
-                        unit_label, base_unit, factor = desired_unit
-                        try:
-                            val_base = sp.simplify(convert_to(val, base_unit))
-                        except Exception as e:
-                            raise ValueError(
-                                f"Conversion to desired unit failed: {e}"
-                            )
-
-                        mag_base, unit_base = split_magnitude_unit(val_base)
-
-                        ratio = sp.simplify(unit_base / base_unit)
-                        if ratio.has(*unit_ns.values()):
-                            raise ValueError(
-                                f"Desired unit '{unit_label}' is not dimensionally compatible with the expression."
-                            )
-
-                        if base_unit == K and unit_label.startswith(r"^\circ"):
-                            mag = sp.simplify(mag_base - 273.15)
-                        else:
-                            mag = sp.simplify(mag_base / factor)
-
-                        mag_str = format_magnitude_decimal(mag, digits=3)
-                        mag_with_unit = rf"{mag_str}\,{unit_label}"
-
-                        symbol_names = {}
-                        for name in user_vars:
-                            sym = sp.Symbol(name)
-                            symbol_names[sym] = var_to_latex(name)
-
-                        latex_expr = latex(
-                            expr_sym,
-                            mul_symbol="\\cdot",
-                            symbol_names=symbol_names,
-                        ).replace("\\cdot", "\\cdot{}")
-
-                        only_units_and_numbers = True
-                        for s in expr_sym.free_symbols:
-                            if s not in unit_ns.values():
-                                only_units_and_numbers = False
-                                break
-
-                        if var is not None:
-                            var_latex = var_to_latex(var)
-                            if only_units_and_numbers:
-                                full_latex = rf"{var_latex} = {mag_with_unit}"
-                            else:
-                                full_latex = rf"{var_latex} = {latex_expr} = {mag_with_unit}"
-                        else:
-                            full_latex = rf"{latex_expr} = {mag_with_unit}"
-
-                        block_items.append({
-                            "type": "latex",
-                            "content": full_latex,
-                        })
-                        continue
-
-                    # automatic conversion to preferred units
-                    if val.has(*unit_ns.values()):
-                        for u in preferred_units:
-                            try:
-                                cand = sp.simplify(convert_to(val, u))
-                                if cand.has(u):
-                                    val_conv = cand
-                                    preferred_used = True
-                                    break
-                            except Exception:
-                                pass
-
-                    val = val_conv
-
-                    if not preferred_used:
-                        try:
-                            val = sp.simplify(convert_to(val, BASE_UNITS))
-                        except Exception:
-                            pass
-
-                    symbol_names = {}
-                    for name in user_vars:
-                        sym = sp.Symbol(name)
-                        symbol_names[sym] = var_to_latex(name)
-
-                    latex_expr = latex(
-                        expr_sym,
-                        mul_symbol="\\cdot",
-                        symbol_names=symbol_names,
-                    ).replace("\\cdot", "\\cdot{}")
-
-                    mag, unit = split_magnitude_unit(val)
-                    mag_str = format_magnitude_decimal(mag, digits=3)
-
-                    if unit == 1:
-                        mag_with_unit = mag_str
-                    else:
-                        if sp.simplify(unit - W/(m*K)) == 0:
-                            latex_unit = r"\frac{\mathrm{W}}{\mathrm{m}\,\mathrm{K}}"
-                        elif sp.simplify(unit - W/(m**2*K)) == 0:
-                            latex_unit = r"\frac{\mathrm{W}}{\mathrm{m}^{2}\,\mathrm{K}}"
-                        elif sp.simplify(unit - J/(kg*K)) == 0:
-                            latex_unit = r"\frac{\mathrm{J}}{\mathrm{kg}\,\mathrm{K}}"
-                        else:
-                            latex_unit = latex(unit)
-                        mag_with_unit = rf"{mag_str}\,{latex_unit}"
-
-                    only_units_and_numbers = True
-                    for s in expr_sym.free_symbols:
-                        if s not in unit_ns.values():
-                            only_units_and_numbers = False
-                            break
-
-                    if var is not None:
-                        var_latex = var_to_latex(var)
-                        if only_units_and_numbers:
-                            full_latex = rf"{var_latex} = {mag_with_unit}"
-                        else:
-                            full_latex = rf"{var_latex} = {latex_expr} = {mag_with_unit}"
-                    else:
-                        full_latex = rf"{latex_expr} = {mag_with_unit}"
-
-                    block_items.append({
-                        "type": "latex",
-                        "content": full_latex,
-                    })
-
-                except Exception as e:
-                    err1 = f"Error in line {line_no}: {stripped}"
-                    err2 = str(e)
-                    safe_err = (
-                        f"{err1} -- {err2}"
-                        .replace("\\", r"\\")
-                        .replace("_", r"\_")
-                    )
-                    block_items.append({
-                        "type": "latex",
-                        "content": rf"\text{{{safe_err}}}",
-                    })
-
-            # Mehrere LaTeX-Items in einer Zeile zusammenfassen
-            merged_items = []
-            current_latex_parts = []
-
-            for item in block_items:
-                if item["type"] == "latex":
-                    current_latex_parts.append(item["content"])
-                else:
-                    if current_latex_parts:
-                        merged_items.append({
-                            "type": "latex",
-                            "content": " \\quad ".join(current_latex_parts),
-                        })
-                        current_latex_parts = []
-                    merged_items.append(item)
-
-            if current_latex_parts:
-                merged_items.append({
-                    "type": "latex",
-                    "content": " \\quad ".join(current_latex_parts),
-                })
-
-            block_items = merged_items
-
-            if block_items:
-                results.append(block_items)
+        results = evaluate_code(user_input)
 
     return render_template("index.html", code=user_input, results=results)
 
@@ -711,18 +908,18 @@ def run_server(open_browser: bool, debug: bool):
     if open_browser:
         def _run():
             app.run(host="127.0.0.1", port=5000, debug=debug)
-        t = threading.Thread(target=_run, daemon=True)
-        t.start()
+
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
         time.sleep(1)
         webbrowser.open("http://127.0.0.1:5000")
-        t.join()
+        thread.join()
     else:
         app.run(host="127.0.0.1", port=5000, debug=debug)
 
 
 if __name__ == "__main__":
     frozen = getattr(sys, "frozen", False)
-
     if frozen:
         run_server(open_browser=True, debug=False)
     else:
