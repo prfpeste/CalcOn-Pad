@@ -7,16 +7,19 @@ It lets you:
 - Perform calculations with physical units (`m`, `s`, `kg`, `N`, `J`, `W`, `Pa`, `bar`, `atm`, `V`, `A`, `Ohm`, `K`, `degC`, `Hz`, `rpm`, `L`, …)
 - Convert results explicitly to target units using `|` syntax
 - Do symbolic math (derivatives, integrals, equations, sums, products, limits)
-- Work with vectors and matrices
+- Work with vectors and matrices, and pick individual values out of a result (e.g. `solve(...)[0]`)
 - Generate plots directly in the browser
 - View results as nicely formatted LaTeX via MathJax
 - Insert Greek symbols and common function snippets from the UI
 - Load and save calculation files via the web UI
 - Print the output in a print-optimized layout
+- Export the current sheet as a standalone, `pdflatex`-compilable `.tex` document (or a `.zip` if it contains plots)
+- Adjust rounding precision and font size from a settings panel
 
 The interface consists of a text editor on the left and a LaTeX/plot output area on the right.
 
 ## Screenshot
+
 ![CalcOn Pad screenshot](images/SC1.png)
 ![CalcOn Pad screenshot](images/SC2.png)
 ![CalcOn Pad screenshot](images/SC3.png)
@@ -25,14 +28,16 @@ The interface consists of a text editor on the left and a LaTeX/plot output area
 ## Features
 
 - Web UI using Flask, HTML/CSS/JavaScript and MathJax
+- Expressions are parsed by a small, purpose-built parser and evaluated through a fixed function whitelist — no `eval()`/`sympify()` is ever run on user input (see [Security](#security) below)
 - SymPy integration for
-  - symbolic expressions (`diff`, `integrate`, `Eq`, `solve`, `nsolve`, `sum`, `prod`, `lim`)
+  - symbolic expressions (`diff`, `integrate`, `Eq`, `solve`, `csolve`, `nsolve`, `sum`, `prod`, `lim`)
   - numeric evaluation
   - symbolic display mode via `:=`
 - Unit system with convenient input:
   - apostrophe syntax for units: `10'J`, `3's`, `5'm`, `10'kg`, `5'W/(m*K)`, …
   - automatic unit simplification for output
   - explicit target units using the `|` syntax (for example `| kWh`, `| bar`, `| Pa`, `| m`)
+  - a bare numeric literal (e.g. `110'degC`) keeps the entered unit instead of converting to base SI
 - Plotting function: `plot(f, x, xmin, xmax)` generates a PNG plot with Matplotlib and shows it in the browser
 - Matrix and vector support:
   - `vec`, `mat`, `Matrix`
@@ -40,35 +45,42 @@ The interface consists of a text editor on the left and a LaTeX/plot output area
   - `dot`, `cross`, `norm`
   - `eye`, `zeros`, `ones`
   - `solve_linear`, `eigenvals`, `eigenvects`
-- Text lines in double quotes are rendered as LaTeX text
-- Text lines starting with `!` are inserted as raw LaTeX
+  - indexing into a result with `[...]`, e.g. `sol[0]`, `M[1][2]`
+- Text lines in double quotes (`"..."`) are rendered as bold LaTeX text; single quotes (`'...'`) render as plain (non-bold) text
+- Lines starting with `#` are comments and are ignored
 - Greek variables are automatically rendered as LaTeX symbols
-- Toolbar buttons for open, save, print, symbols, functions, matrices/vectors, and run
+- Toolbar buttons: open file, save file, insert Greek letters/symbols, insert function snippets, insert equation/calculus snippets, insert matrix/vector snippets, insert a plot snippet, settings (rounding precision, font size), calculate, print, LaTeX export, info
 - Print stylesheet that hides the editor and prints only the formatted output
+- A configurable computation timeout (10s by default) protects the server against accidentally or intentionally very expensive input
+
+## Security
+
+Expressions are evaluated through a custom recursive-descent parser (`parsing/`) and a small AST-to-SymPy bridge (`mathlib/sympy_bridge.py`) that only ever calls a fixed whitelist of functions (`mathlib/functions.py`). Unknown function names become inert symbolic placeholders rather than being executed. No user input is ever passed to Python's `eval()` or SymPy's `sympify()`/`parse_expr()`.
+
+Each computation additionally runs in a separate process with a hard timeout (`core/safe_runner.py`, default 10s) so a single expensive or hanging input can't tie up the server.
+
+The bundled `run.py` binds to `127.0.0.1` by default — if you expose this on a network beyond localhost, review `app.py`/`run.py` first.
 
 ## Requirements
 
 - Python 3
-- Python packages:
-  - `flask`
-  - `sympy`
-  - `matplotlib`
-  - `numpy`
+- Python packages: see `requirements.txt` (`Flask`, `Jinja2`, `sympy`, `matplotlib`, `numpy`)
+- For running the test suite: see `requirements-dev.txt` (`pytest`)
 
-Install the dependencies, for example:
+Install the runtime dependencies:
 
 ```bash
-pip install flask sympy matplotlib numpy
+pip install -r requirements.txt
 ```
 
 ## Running from source
 
-The main script is called `CalcOnPad.py`.
+The main script is `run.py`.
 
 Start the application with:
 
 ```bash
-python CalcOnPad.py
+python run.py
 ```
 
 By default, the Flask application runs on:
@@ -77,35 +89,61 @@ By default, the Flask application runs on:
 http://127.0.0.1:5000
 ```
 
-When running as a normal Python script, it starts the Flask development server.
-When running as a packaged/frozen executable, it starts the server and opens the browser automatically.
+When running as a normal Python script, it starts the Flask development server. When running as a packaged/frozen executable, it starts the server and opens the browser automatically.
+
+## Running the tests
+
+```bash
+pip install -r requirements.txt -r requirements-dev.txt
+pytest
+```
 
 ## Building a standalone binary (PyInstaller)
 
-You can build a single executable using PyInstaller.
+You can build a single executable using PyInstaller. A ready-made build script is provided as `build.sh` (Linux/macOS):
 
-### 1. Install PyInstaller
+```bash
+./build.sh
+```
+
+It creates a virtual environment, installs `pyinstaller` and the runtime requirements, runs PyInstaller, and leaves a single `CalcOnPad` executable in the project root.
+
+### Manual build
+
+#### 1. Install PyInstaller
 
 ```bash
 pip install pyinstaller
 ```
 
-### 2. Make sure the project structure looks like this
+#### 2. Project structure
+
+The build bundles both `templates/` and `static/` (CSS, JavaScript, icons) — both are required for the UI to render correctly:
 
 ```text
-CalcOnPad.py
+run.py
+app.py
+core/
+mathlib/
+parsing/
+rendering/
 templates/
   index.html
+static/
+  main.css
+  editor.js
+  icons/
 ```
 
-### 3. Build the executable on Linux / macOS
+#### 3. Build the executable on Linux / macOS
 
 ```bash
 pyinstaller \
   --name CalcOnPad \
   --onefile \
   --add-data "templates:templates" \
-  CalcOnPad.py
+  --add-data "static:static" \
+  run.py
 ```
 
 After a successful build, the executable will be in the `dist/` folder.
@@ -116,7 +154,7 @@ Run it with:
 ./dist/CalcOnPad
 ```
 
-### 4. Build the executable on Windows
+#### 4. Build the executable on Windows
 
 On Windows, the separator in `--add-data` is `;` instead of `:`:
 
@@ -125,7 +163,8 @@ pyinstaller ^
   --name CalcOnPad ^
   --onefile ^
   --add-data "templates;templates" ^
-  CalcOnPad.py
+  --add-data "static;static" ^
+  run.py
 ```
 
 The executable will be created in:
@@ -141,14 +180,21 @@ dist\CalcOnPad.exe
 - Left side: textarea for the calculation code
 - Right side: output area for LaTeX formulas and plots
 
-- Top toolbar:
+- Top toolbar (input side):
   - Open file: load a local text file into the editor
   - Save file: download the current editor content as a text file
-  - Print: open the browser's print dialog with a print-optimized layout
-  - Greek symbols: insert Greek letters into the editor
+  - Greek symbols: insert Greek letters and symbols into the editor
   - Functions: insert common math function snippets
+  - Equations & calculus: insert `diff`, `integrate`, `Eq`, `solve`, `sum`, `prod`, `lim`, … snippets
   - Matrices / vectors: insert matrix and vector snippets
-  - Run (`=`): submit the current code to the server and update the output
+  - Plot: insert a `plot(...)` snippet
+  - Settings: rounding precision (%) and font size (px), applied to both panels
+  - Calculate: submit the current code to the server and update the output
+
+- Top toolbar (result side):
+  - Print: open the browser's print dialog with a print-optimized layout
+  - LaTeX export: download the sheet as a `.tex` file, or a `.zip` (containing the `.tex` and any plot images) if it contains at least one plot
+  - Info: version, author, and technology info
 
 ### Input syntax
 
@@ -192,10 +238,11 @@ f := x^2 + 2*x + 1
 df := diff(f, x)
 ```
 
-- Equation solver
+- Equation solver, and picking one solution out of several
 
 ```text
-solve(Eq(x^2 - 5, 0), x)
+sol = solve(Eq(x^2 - 5, 0), x)
+x_1 = sol[0] ; x_2 = sol[1]
 nsolve((x^2 - 2), (x), (1))
 ```
 
@@ -235,14 +282,9 @@ plot(f, x, 0, 2*pi)
 - Comments / text
 
 ```text
-"Example calculation with units"
-"Heat transfer example"
-```
-
-- Raw LaTeX
-
-```text
-"!\frac{a}{b}"
+# this line is ignored
+"Bold heading or comment"
+'Plain (non-bold) comment'
 ```
 
 ### Greek variables
@@ -258,13 +300,52 @@ Greek letters can be used directly in variable names, for example:
 
 ## Project structure
 
-A minimal structure:
-
 ```text
-CalcOnPad.py          # main Flask application (SymPy, units, plotting, formatting)
+run.py                 # entry point: starts the Flask dev server, opens the browser when frozen
+app.py                 # Flask app/routes, settings parsing, LaTeX export route
+build.sh                # PyInstaller build script
+requirements.txt        # runtime dependencies
+requirements-dev.txt     # test-only dependencies (pytest)
+pytest.ini
+conftest.py
+
+parsing/                # lexer + recursive-descent parser -> AST (no eval())
+  lexer.py
+  parser.py
+  ast_nodes.py
+
+rendering/
+  latex_input.py        # AST -> LaTeX renderer for the input/formula side
+
+mathlib/
+  sympy_bridge.py        # safe AST -> SymPy translation (whitelist-only function calls)
+  units.py               # unit table, unit conversion/formatting, LaTeX text escaping
+  functions.py           # whitelisted numeric/display/plot functions
+  solving.py              # solve()/csolve() wrappers
+  plotting.py             # matplotlib plot generation
+
+core/
+  context.py             # EvaluationContext: parses + evaluates a line
+  engine.py               # evaluate_code(): splits input into lines/blocks
+  formatter.py            # builds the final LaTeX for a computed result
+  latex_export.py          # builds a standalone .tex document from results
+  safe_runner.py           # process-based timeout wrapper
+
 templates/
-  index.html          # HTML template with editor, toolbar, panels and MathJax
+  index.html             # HTML template with editor, toolbar, panels and MathJax
+
+static/
+  main.css
+  editor.js
+  icons/
+
+tests/                   # pytest test suite
 ```
+
+## Credits
+
+- Author: Prof. Dr. Peter Stein
+- Coding: Claude Sonnet 5 (Anthropic) — the implementation, architecture, tests, and documentation in this repository were written with Claude Sonnet 5 as an AI coding assistant.
 
 ## License
 
