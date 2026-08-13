@@ -1,3 +1,4 @@
+import multiprocessing
 import sys
 import threading
 import time
@@ -21,6 +22,14 @@ def run_server(open_browser: bool, debug: bool):
 
 
 if __name__ == "__main__":
+    # Required for multiprocessing (used by core/safe_runner.py's
+    # timeout protection) to work correctly in a PyInstaller --onefile
+    # build -- without this, a frozen app can end up re-launching
+    # itself instead of just spawning a worker process (most visible on
+    # Windows). A no-op when running from source. Must be the very
+    # first thing that happens.
+    multiprocessing.freeze_support()
+
     frozen = getattr(sys, "frozen", False)
     if frozen:
         run_server(open_browser=True, debug=False)

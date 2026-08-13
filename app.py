@@ -1,4 +1,6 @@
 import io
+import os
+import sys
 import zipfile
 
 from flask import Flask, Response, render_template, request
@@ -13,6 +15,21 @@ DEFAULT_FONT_SIZE = "14"
 
 _FONT_SIZE_MIN_PX = 10
 _FONT_SIZE_MAX_PX = 40
+
+
+def _resource_base_path() -> str:
+    """Directory templates/ and static/ live under.
+
+    When running from source, that's simply this file's directory. When
+    frozen into a single executable (PyInstaller --onefile), everything
+    bundled via --add-data is extracted at startup into a temporary
+    directory exposed as sys._MEIPASS -- resources must be looked up
+    there instead, or Flask silently fails to find templates/static and
+    the packaged app shows a blank/unstyled page.
+    """
+    if getattr(sys, "frozen", False):
+        return getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(sys.executable)))
+    return os.path.dirname(os.path.abspath(__file__))
 
 
 def _parse_precision_to_rel_tol(raw_precision: str) -> float:
@@ -97,7 +114,12 @@ def _evaluate_code_safely(user_input: str, rel_tol: float):
 
 
 def create_app():
-    app = Flask(__name__)
+    base_path = _resource_base_path()
+    app = Flask(
+        __name__,
+        template_folder=os.path.join(base_path, "templates"),
+        static_folder=os.path.join(base_path, "static"),
+    )
 
     @app.route("/", methods=["GET", "POST"])
     def index():

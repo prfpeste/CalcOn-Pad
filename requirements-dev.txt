@@ -1,0 +1,4 @@
+# Only needed to run the test suite (pytest tests/), not to run the
+# app itself -- install in addition to requirements.txt:
+#   pip install -r requirements.txt -r requirements-dev.txt
+pytest>=9.1
