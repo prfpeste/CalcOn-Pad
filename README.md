@@ -1,6 +1,6 @@
 # EngiPad
 
-EngiPad is a small browser-based calculation notebook built with Python, Flask, SymPy, Matplotlib, and NumPy.
+EngiPad is a browser-based calculation notebook for engineers using Python, SymPy, and Matplotlib
 
 It lets you:
 
