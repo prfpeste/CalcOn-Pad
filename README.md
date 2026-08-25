@@ -1,6 +1,6 @@
-# CalcOn Pad
+# EngiPad
 
-CalcOn Pad is a small browser-based calculation notebook built with Python, Flask, SymPy, Matplotlib, and NumPy.
+EngiPad is a small browser-based calculation notebook built with Python, Flask, SymPy, Matplotlib, and NumPy.
 
 It lets you:
 
@@ -20,10 +20,10 @@ The interface consists of a text editor on the left and a LaTeX/plot output area
 
 ## Screenshot
 
-![CalcOn Pad screenshot](images/SC1.png)
-![CalcOn Pad screenshot](images/SC2.png)
-![CalcOn Pad screenshot](images/SC3.png)
-![CalcOn Pad screenshot](images/SC4.png)
+![EngiPad screenshot](images/SC1.png)
+![EngiPad screenshot](images/SC2.png)
+![EngiPad screenshot](images/SC3.png)
+![EngiPad screenshot](images/SC4.png)
 
 ## Features
 
@@ -106,7 +106,7 @@ You can build a single executable using PyInstaller. A ready-made build script i
 ./build.sh
 ```
 
-It creates a virtual environment, installs `pyinstaller` and the runtime requirements, runs PyInstaller, and leaves a single `CalcOnPad` executable in the project root.
+It creates a virtual environment, installs `pyinstaller` and the runtime requirements, runs PyInstaller, and leaves a single `EngiPad` executable in the project root.
 
 ### Manual build
 
@@ -139,7 +139,7 @@ static/
 
 ```bash
 pyinstaller \
-  --name CalcOnPad \
+  --name EngiPad \
   --onefile \
   --add-data "templates:templates" \
   --add-data "static:static" \
@@ -151,7 +151,7 @@ After a successful build, the executable will be in the `dist/` folder.
 Run it with:
 
 ```bash
-./dist/CalcOnPad
+./dist/EngiPad
 ```
 
 #### 4. Build the executable on Windows
@@ -160,7 +160,7 @@ On Windows, the separator in `--add-data` is `;` instead of `:`:
 
 ```bash
 pyinstaller ^
-  --name CalcOnPad ^
+  --name EngiPad ^
   --onefile ^
   --add-data "templates;templates" ^
   --add-data "static;static" ^
@@ -170,7 +170,7 @@ pyinstaller ^
 The executable will be created in:
 
 ```text
-dist\CalcOnPad.exe
+dist\EngiPad.exe
 ```
 
 ## Usage
