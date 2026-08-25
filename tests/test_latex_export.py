@@ -106,7 +106,7 @@ class TestExportLatexRoute:
         )
         assert response.status_code == 200
         assert response.mimetype == "application/x-tex"
-        assert "calconpad_export.tex" in response.headers["Content-Disposition"]
+        assert "engipad_export.tex" in response.headers["Content-Disposition"]
 
         tex = response.get_data(as_text=True)
         assert r"\[ a = 2 + 3 \cdot 4 = 14 \]" in tex
@@ -118,14 +118,14 @@ class TestExportLatexRoute:
         )
         assert response.status_code == 200
         assert response.mimetype == "application/zip"
-        assert "calconpad_export.zip" in response.headers["Content-Disposition"]
+        assert "engipad_export.zip" in response.headers["Content-Disposition"]
 
         with zipfile.ZipFile(BytesIO(response.data)) as zf:
             names = zf.namelist()
-            assert "calconpad_export.tex" in names
+            assert "engipad_export.tex" in names
             assert "plot_1.png" in names
 
-            tex = zf.read("calconpad_export.tex").decode("utf-8")
+            tex = zf.read("engipad_export.tex").decode("utf-8")
             assert "plot_1.png" in tex
             assert zf.read("plot_1.png").startswith(b"\x89PNG")
 

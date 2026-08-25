@@ -14,10 +14,10 @@ pip install -r requirements.txt
 python -m PyInstaller \
   --clean \
   --onefile \
-  --name CalcOnPad \
+  --name EngiPad \
   --add-data "templates:templates" \
   --add-data "static:static" \
   run.py
 
-mv dist/CalcOnPad CalcOnPad
-rm -rf build dist CalcOnPad.spec .venv
+mv dist/EngiPad EngiPad
+rm -rf build dist EngiPad.spec .venv

@@ -54,7 +54,7 @@ def _decode_plot_src(src: str) -> tuple[bytes, str]:
     return base64.b64decode(match.group("data")), ext
 
 
-def build_latex_document(results, title: str = "CalcOnPad Export") -> tuple[str, list[tuple[str, bytes]]]:
+def build_latex_document(results, title: str = "EngiPad Export") -> tuple[str, list[tuple[str, bytes]]]:
     """Builds the .tex source + a list of (filename, image bytes) for
     every plot contained in the results.
 

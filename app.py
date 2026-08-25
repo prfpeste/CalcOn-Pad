@@ -152,13 +152,13 @@ def create_app():
                 tex,
                 mimetype="application/x-tex",
                 headers={
-                    "Content-Disposition": "attachment; filename=calconpad_export.tex"
+                    "Content-Disposition": "attachment; filename=engipad_export.tex"
                 },
             )
 
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr("calconpad_export.tex", tex)
+            zf.writestr("engipad_export.tex", tex)
             for filename, image_bytes in images:
                 zf.writestr(filename, image_bytes)
         buf.seek(0)
@@ -167,7 +167,7 @@ def create_app():
             buf.getvalue(),
             mimetype="application/zip",
             headers={
-                "Content-Disposition": "attachment; filename=calconpad_export.zip"
+                "Content-Disposition": "attachment; filename=engipad_export.zip"
             },
         )
 

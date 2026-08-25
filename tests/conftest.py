@@ -11,7 +11,7 @@ def ctx():
 
 
 def eval_and_format(line: str, context: EvaluationContext, symbolic_only: bool = False) -> dict:
-    """Runs a single CalcOnPad line end to end, exactly like
+    """Runs a single EngiPad line end to end, exactly like
     core/engine.py would for a normal line: eval_line() ->
     format_computation_result(). Returns the resulting
     {"type": "latex", "content": ...} dict.

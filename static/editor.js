@@ -102,7 +102,7 @@ function saveFile() {
   const text = codeTextarea.value || '';
   const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
 
-  let filename = prompt('enter filename:', 'CalcOnPad.txt');
+  let filename = prompt('enter filename:', 'EngiPad.txt');
   if (!filename) {
     return;
   }

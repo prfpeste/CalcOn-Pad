@@ -1,4 +1,4 @@
-"""Recursive-descent parser for CalcOnPad expressions.
+"""Recursive-descent parser for EngiPad expressions.
 
 Builds an AST (parsing.ast_nodes) from the token list produced by
 parsing.lexer. Classic precedence hierarchy (low -> high):

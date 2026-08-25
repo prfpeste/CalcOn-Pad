@@ -1,4 +1,4 @@
-"""Lexer (tokenizer) for the CalcOnPad expression parser.
+"""Lexer (tokenizer) for the EngiPad expression parser.
 
 Scope:
     Numbers, identifiers (incl. unicode like Greek letters and
