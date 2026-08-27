@@ -18,6 +18,10 @@ It lets you:
 
 The interface consists of a text editor on the left and a LaTeX/plot output area on the right.
 
+# Download
+[Download for Windows](https://github.com/prfpeste/EngiPad/releases/download/v1.1.1/EngiPad-1.1.1-windows-x86_64_rebrand.exe)
+[Download for Linux](https://github.com/prfpeste/EngiPad/releases/download/v1.1.1/EngiPad-1.1.1-linux-x86_64.bin)
+
 ## Screenshot
 
 ![EngiPad screenshot](images/SC1.png)
